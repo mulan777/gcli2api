@@ -476,6 +476,7 @@ ANTIGRAVITY_NATIVE_MODEL_IDS = {
     "gemini-3.1-pro-high",
     "gemini-3.1-pro-low",
     "gemini-3.5-flash-low",
+    "gpt-oss-120b-medium",
 }
 
 
