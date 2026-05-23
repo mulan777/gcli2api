@@ -760,10 +760,12 @@ function createCredCard(credInfo, manager) {
     const emailInfo = credInfo.user_email
         ? `<div class="cred-email" style="font-size: 12px; color: #666; margin-top: 2px;">${credInfo.user_email}</div>`
         : '<div class="cred-email" style="font-size: 12px; color: #999; margin-top: 2px; font-style: italic;">未获取邮箱</div>';
-    const successCount = Number(credInfo.success_count || 0);
-    const failureCount = Number(credInfo.failure_count || 0);
-    const totalCount = successCount + failureCount;
-    const usageStatsInfo = `<div class="cred-usage-stats" style="font-size: 12px; color: #555; margin-top: 2px;" title="该凭证累计调用统计">统计：成功 ${successCount} / 失败 ${failureCount} / 总计 ${totalCount}</div>`;
+    const currentCycle = credInfo.cycle_stats || {};
+    const cycleTotal = Number(currentCycle.total || 0);
+    const cyclePro = Number(currentCycle.pro || 0);
+    const cycleFlash = Number(currentCycle.flash || 0);
+    const cycleOther = Number(currentCycle.other || 0);
+    const usageStatsInfo = `<div class="cred-usage-stats" style="font-size: 12px; color: #555; margin-top: 2px;" title="当前循环调用统计：从上一轮冷却结算后开始，到下一次进入冷却前累计">当前循环：Pro ${cyclePro} / Flash ${cycleFlash} / 其他 ${cycleOther} / 总计 ${cycleTotal}</div>`;
 
     const checkboxClass = manager.getElementId('file-checkbox');
 
