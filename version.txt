@@ -1,4 +1,1 @@
-full_hash=43dc325871c17fe46b483fd87c15e830c0b8db40
-short_hash=43dc325
-message=Merge upstream master for v1.6.18 release
-date=2026-06-21 12:38:28 +0000
+merge_ready=v1.6.19
