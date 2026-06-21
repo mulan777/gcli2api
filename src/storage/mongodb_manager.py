@@ -539,10 +539,6 @@ class MongoDBManager:
             # 构建普通查询（避免 $sample 聚合导致全集合扫描）
             match_query: Dict[str, Any] = {"disabled": False}
 
-            # pro 模型只允许非 free tier 凭证
-            if mode == "geminicli" and model_name and "pro" in model_name.lower():
-                match_query["tier"] = {"$ne": "free"}
-
             # preview 模型只允许 preview=True 的凭证
             if mode == "geminicli" and model_name and "preview" in model_name.lower():
                 match_query["preview"] = True

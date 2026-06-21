@@ -1,4 +1,4 @@
-full_hash=d7d8619a8b2a3728e597d0ef50d5b6c96c5a8d11
-short_hash=d7d8619
-message=chore: release v1.6.16 with version metadata
-date=2026-06-21 08:01:11 +0000
+full_hash=71629b84fb2032fea1907d91c97bec3f32f31784
+short_hash=71629b8
+message=Merge origin master before v1.6.18 release
+date=2026-06-21 12:37:59 +0000
