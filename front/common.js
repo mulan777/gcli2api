@@ -770,11 +770,13 @@ function createCredCard(credInfo, manager) {
     const cyclePro = Number(currentCycle.pro || 0);
     const cycleFlash = Number(currentCycle.flash || 0);
     const cycleOther = Number(currentCycle.other || 0);
+    const cycleClaudeSuccess = Number(currentCycle.claude_success || 0);
+    const cycleClaudeFailure = Number(currentCycle.claude_failure || 0);
     const lastTotal = Number(lastCycle.total || 0);
     const lastPro = Number(lastCycle.pro || 0);
     const lastFlash = Number(lastCycle.flash || 0);
     const lastOther = Number(lastCycle.other || 0);
-    const currentCycleLine = `<div class="cred-usage-stats" style="font-size: 12px; color: #555; margin-top: 2px;" title="当前循环调用统计：从上一轮冷却结算后开始，到下一次进入冷却前累计">当前循环：Pro ${cyclePro} / Flash ${cycleFlash} / 其他 ${cycleOther} / 总计 ${cycleTotal}</div>`;
+    const currentCycleLine = `<div class="cred-usage-stats" style="font-size: 12px; color: #555; margin-top: 2px;" title="当前循环调用统计：从上一轮冷却结算后开始，到下一次进入冷却前累计；Claude 仅统计模型名包含 claude 的请求">当前循环：Pro ${cyclePro} / Flash ${cycleFlash} / 其他 ${cycleOther} / Claude 成功 ${cycleClaudeSuccess} / 失败 ${cycleClaudeFailure} / 总计 ${cycleTotal}</div>`;
     const lastCycleLine = lastTotal > 0
         ? `<div class="cred-usage-stats" style="font-size: 12px; color: #777; margin-top: 2px;" title="上一轮循环统计：进入 ${lastCycle.cooldown_family || 'unknown'} 冷却前累计">上一轮：Pro ${lastPro} / Flash ${lastFlash} / 其他 ${lastOther} / 总计 ${lastTotal}</div>`
         : '';

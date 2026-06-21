@@ -1442,7 +1442,7 @@ class SQLiteManager:
                             THEN '{{}}' ELSE error_messages END,
                         updated_at = unixepoch()
                     WHERE filename = ?
-                """, (self._bump_cycle_stats(stats_row[0] if stats_row else None, model_name), filename,))
+                """, (self._bump_cycle_stats(stats_row[0] if stats_row else None, model_name, success=True), filename,))
 
                 # 条件删除模型冷却：只有模型键存在时才写入
                 if model_name:
@@ -1496,7 +1496,7 @@ class SQLiteManager:
                         updated_at = unixepoch()
                     WHERE filename = ?
                 """, (
-                    self._bump_cycle_stats(stats_row[0] if stats_row else None, model_name),
+                    self._bump_cycle_stats(stats_row[0] if stats_row else None, model_name, success=False),
                     json.dumps([error_code]),
                     json.dumps(error_messages),
                     filename,
@@ -1517,7 +1517,11 @@ class SQLiteManager:
         return "other"
 
     @staticmethod
-    def _bump_cycle_stats(raw: Optional[str], model_name: Optional[str]) -> str:
+    def _is_claude_model(model_name: Optional[str]) -> bool:
+        return "claude" in (model_name or "").lower()
+
+    @staticmethod
+    def _bump_cycle_stats(raw: Optional[str], model_name: Optional[str], success: bool = True) -> str:
         now = time.time()
         try:
             stats = json.loads(raw or "{}")
@@ -1529,9 +1533,14 @@ class SQLiteManager:
         stats.setdefault("pro", 0)
         stats.setdefault("flash", 0)
         stats.setdefault("other", 0)
+        stats.setdefault("claude_success", 0)
+        stats.setdefault("claude_failure", 0)
         stats["total"] = int(stats.get("total") or 0) + 1
         family = SQLiteManager._model_cycle_family(model_name)
         stats[family] = int(stats.get(family) or 0) + 1
+        if SQLiteManager._is_claude_model(model_name):
+            key = "claude_success" if success else "claude_failure"
+            stats[key] = int(stats.get(key) or 0) + 1
         stats["updated_at"] = now
         return json.dumps(stats)
 
