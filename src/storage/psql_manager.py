@@ -1216,7 +1216,7 @@ class PSQLManager:
                             THEN '{{}}' ELSE error_messages END,
                         updated_at = EXTRACT(EPOCH FROM NOW())
                     WHERE filename = $1
-                """, filename, self._bump_cycle_stats(stats_row["cycle_stats"] if stats_row else None, model_name))
+                """, filename, self._bump_cycle_stats(stats_row["cycle_stats"] if stats_row else None, model_name, success=True))
 
                 if model_name:
                     row = await conn.fetchrow(
@@ -1305,7 +1305,7 @@ class PSQLManager:
                         updated_at = EXTRACT(EPOCH FROM NOW())
                     WHERE filename = $4
                     """,
-                    self._bump_cycle_stats(stats_row["cycle_stats"] if stats_row else None, model_name),
+                    self._bump_cycle_stats(stats_row["cycle_stats"] if stats_row else None, model_name, success=False),
                     json.dumps([error_code]),
                     json.dumps(error_messages),
                     filename,
@@ -1361,7 +1361,11 @@ class PSQLManager:
         return "other"
 
     @staticmethod
-    def _bump_cycle_stats(raw: Optional[str], model_name: Optional[str]) -> str:
+    def _is_claude_model(model_name: Optional[str]) -> bool:
+        return "claude" in (model_name or "").lower()
+
+    @staticmethod
+    def _bump_cycle_stats(raw: Optional[str], model_name: Optional[str], success: bool = True) -> str:
         now = time.time()
         try:
             stats = json.loads(raw or "{}")
@@ -1373,9 +1377,14 @@ class PSQLManager:
         stats.setdefault("pro", 0)
         stats.setdefault("flash", 0)
         stats.setdefault("other", 0)
+        stats.setdefault("claude_success", 0)
+        stats.setdefault("claude_failure", 0)
         stats["total"] = int(stats.get("total") or 0) + 1
         family = PSQLManager._model_cycle_family(model_name)
         stats[family] = int(stats.get(family) or 0) + 1
+        if PSQLManager._is_claude_model(model_name):
+            key = "claude_success" if success else "claude_failure"
+            stats[key] = int(stats.get(key) or 0) + 1
         stats["updated_at"] = now
         return json.dumps(stats)
 
