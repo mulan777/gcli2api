@@ -1,1 +1,4 @@
-merge_ready=v1.6.19
+full_hash=5e9196f79c214335e95c1153e1f5f3f81aa5cf82
+short_hash=5e9196f
+message=Merge upstream fingerprint fix for v1.6.19
+date=2026-06-21 13:05:34 +0000
