@@ -1,4 +1,4 @@
-full_hash=38226f7b08026105baf7e0862b8f58fed3f3b619
-short_hash=38226f7
-message=Merge upstream fingerprint fix for v1.6.19 release
-date=2026-06-21 13:05:37 +0000
+full_hash=02468e7c6972c8b8b0f5515d66b6f1af017aae1f
+short_hash=02468e7
+message=feat(antigravity): allow disabling Claude per credential
+date=2026-06-21 15:33:35 +0000

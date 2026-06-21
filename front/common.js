@@ -135,6 +135,7 @@ function createCredsManager(type) {
                             preview: item.preview,
                             tier: item.tier || 'pro',
                             enable_credit: !!item.enable_credit,
+                            model_disabled: item.model_disabled || {},
                             success_count: item.success_count || 0,
                             failure_count: item.failure_count || 0,
                             cycle_stats: item.cycle_stats || {},
@@ -342,7 +343,9 @@ function createCredsManager(type) {
                 delete: '删除',
                 permanent_disable: '永久禁用',
                 enable_credit: '开启积分',
-                disable_credit: '关闭积分'
+                disable_credit: '关闭积分',
+                disable_claude: '禁用 Claude',
+                enable_claude: '恢复 Claude'
             };
             const actionLabel = actionNames[action] || action;
             const confirmMsg = action === 'delete'
@@ -690,13 +693,17 @@ function createCredCard(credInfo, manager) {
     const tierColor = tier === 'ultra' ? '#ff9800' : (tier === 'free' ? '#607d8b' : '#2e7d32');
     statusBadges += `<span class="status-badge" style="background-color: ${tierColor}; color: white;" title="凭证等级: ${tierLabel}">Tier: ${tierLabel}</span>`;
 
-    // Credit 状态显示（仅 antigravity）
+    // Credit / Claude 状态显示（仅 antigravity）
     if (managerType === 'antigravity') {
         if (credInfo.enable_credit) {
             statusBadges += '<span class="status-badge" style="background-color: #2e7d32; color: white;" title="当前已开启Credit模式">Credit: ON</span>';
         } else {
             statusBadges += '<span class="status-badge" style="background-color: #616161; color: white;" title="当前已关闭Credit模式">Credit: OFF</span>';
         }
+        const claudeDisabled = !!(credInfo.model_disabled && credInfo.model_disabled.claude);
+        statusBadges += claudeDisabled
+            ? '<span class="status-badge" style="background-color: #8e24aa; color: white;" title="该凭证已禁用 Claude，Gemini 仍可使用">Claude: OFF</span>'
+            : '<span class="status-badge" style="background-color: #6a1b9a; color: white;" title="该凭证允许 Claude 请求">Claude: ON</span>';
     }
 
     // 模型级冷却状态
@@ -746,6 +753,10 @@ function createCredCard(credInfo, manager) {
         ${managerType === 'antigravity' ? (credInfo.enable_credit
             ? `<button class="cred-btn" data-filename="${filename}" data-action="disable_credit" title="关闭该凭证的Credit模式">关闭 Credit</button>`
             : `<button class="cred-btn" data-filename="${filename}" data-action="enable_credit" title="开启该凭证的Credit模式">开启 Credit</button>`
+        ) : ''}
+        ${managerType === 'antigravity' ? ((credInfo.model_disabled && credInfo.model_disabled.claude)
+            ? `<button class="cred-btn" data-filename="${filename}" data-action="enable_claude" title="恢复该凭证处理 Claude 请求，Gemini 不受影响">恢复 Claude</button>`
+            : `<button class="cred-btn disable" data-filename="${filename}" data-action="disable_claude" title="只禁用该凭证的 Claude 请求，Gemini 仍可使用">禁用 Claude</button>`
         ) : ''}
         ${managerType !== 'antigravity' ? `<button class="cred-btn" onclick="configurePreviewChannel('${filename}')" title="配置Preview通道，启用实验性功能">设置预览</button>` : ''}
         <button class="cred-btn" data-filename="${filename}" data-action="remark" title="给该凭证设置备注/标签">备注</button>
