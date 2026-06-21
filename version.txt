@@ -1,4 +1,4 @@
-full_hash=71629b84fb2032fea1907d91c97bec3f32f31784
-short_hash=71629b8
-message=Merge origin master before v1.6.18 release
-date=2026-06-21 12:37:59 +0000
+full_hash=43dc325871c17fe46b483fd87c15e830c0b8db40
+short_hash=43dc325
+message=Merge upstream master for v1.6.18 release
+date=2026-06-21 12:38:28 +0000
