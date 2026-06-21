@@ -27,6 +27,7 @@ class SQLiteManager:
         "last_success",
         "user_email",
         "model_cooldowns",
+        "model_disabled",
         "preview",
         "tier",
         "enable_credit",
@@ -67,6 +68,7 @@ class SQLiteManager:
             ("last_success", "REAL"),
             ("user_email", "TEXT"),
             ("model_cooldowns", "TEXT DEFAULT '{}'"),
+            ("model_disabled", "TEXT DEFAULT '{}'"),
             ("tier", "TEXT DEFAULT 'pro'"),
             ("enable_credit", "INTEGER DEFAULT 0"),
             ("rotation_order", "INTEGER DEFAULT 0"),
@@ -231,6 +233,7 @@ class SQLiteManager:
 
                 -- 模型级 CD 支持 (JSON: {model_name: cooldown_timestamp})
                 model_cooldowns TEXT DEFAULT '{}',
+                model_disabled TEXT DEFAULT '{}',
 
                 -- tier 状态 (默认为 pro)
                 tier TEXT DEFAULT 'pro',
@@ -469,7 +472,7 @@ class SQLiteManager:
                         return None
                 else:
                     async with db.execute(f"""
-                        SELECT filename, credential_data, model_cooldowns, enable_credit
+                        SELECT filename, credential_data, model_cooldowns, model_disabled, enable_credit
                         FROM {table_name}
                         WHERE disabled = 0
                         ORDER BY RANDOM()
@@ -660,7 +663,7 @@ class SQLiteManager:
                 if key in self.STATE_FIELDS:
                     if key == "enable_credit" and mode != "antigravity":
                         continue
-                    if key in ("error_codes", "error_messages", "model_cooldowns"):
+                    if key in ("error_codes", "error_messages", "model_cooldowns", "model_disabled"):
                         # JSON 字段需要序列化
                         set_clauses.append(f"{key} = ?")
                         values.append(json.dumps(value))
@@ -758,7 +761,7 @@ class SQLiteManager:
                 else:
                     # antigravity 模式
                     async with db.execute(f"""
-                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
+                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns, model_disabled,
                                tier, enable_credit, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name} WHERE filename = ?
                     """, (filename,)) as cursor:
@@ -790,6 +793,7 @@ class SQLiteManager:
                         "last_success": time.time(),
                         "user_email": None,
                         "model_cooldowns": {},
+                        "model_disabled": {},
                         "tier": "pro",
                         "enable_credit": False,
                         "success_count": 0,
@@ -854,7 +858,7 @@ class SQLiteManager:
                     # antigravity 模式
                     async with db.execute(f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, model_cooldowns, tier, enable_credit,
+                               user_email, model_cooldowns, model_disabled, tier, enable_credit,
                                success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                     """) as cursor:
@@ -990,7 +994,7 @@ class SQLiteManager:
                 else:
                     all_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, rotation_order, model_cooldowns, tier, enable_credit,
+                               user_email, rotation_order, model_cooldowns, model_disabled, tier, enable_credit,
                                success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                         {where_clause}
@@ -1040,34 +1044,50 @@ class SQLiteManager:
                             if not match:
                                 continue
 
-                        row_remark = row[14] or "" if len(row) > 14 else ""
+                        row_remark = (row[14] if mode == "geminicli" else row[15]) or "" if len(row) > (14 if mode == "geminicli" else 15) else ""
                         if remark_filter is not None and row_remark != remark_filter:
                             continue
 
-                        summary = {
-                            "filename": filename,
-                            "disabled": bool(row[1]),
-                            "permanent_disabled": bool(row[11]) if len(row) > 11 else False,
-                            "error_codes": error_codes,
-                            "last_success": row[3] or current_time,
-                            "user_email": row[4],
-                            "rotation_order": row[5],
-                            "model_cooldowns": active_cooldowns,
-                            "tier": row[8] if mode == "geminicli" and row[8] is not None else (
-                                row[7] if mode != "geminicli" and row[7] is not None else "pro"
-                            ),
-                            "success_count": row[9] or 0,
-                            "failure_count": row[10] or 0,
-                            "cycle_stats": json.loads(row[12] or "{}") if len(row) > 12 else {},
-                            "last_cycle_stats": json.loads(row[13] or "{}") if len(row) > 13 else {},
-                            "remark": row_remark,
-                        }
-
-                        if mode != "geminicli":
-                            summary["enable_credit"] = bool(row[8]) if row[8] is not None else False
+                        if mode == "geminicli":
+                            summary = {
+                                "filename": filename,
+                                "disabled": bool(row[1]),
+                                "permanent_disabled": bool(row[11]) if len(row) > 11 else False,
+                                "error_codes": error_codes,
+                                "last_success": row[3] or current_time,
+                                "user_email": row[4],
+                                "rotation_order": row[5],
+                                "model_cooldowns": active_cooldowns,
+                                "model_disabled": {},
+                                "tier": row[8] if row[8] is not None else "pro",
+                                "success_count": row[9] or 0,
+                                "failure_count": row[10] or 0,
+                                "cycle_stats": json.loads(row[12] or "{}") if len(row) > 12 else {},
+                                "last_cycle_stats": json.loads(row[13] or "{}") if len(row) > 13 else {},
+                                "remark": row_remark,
+                                "preview": bool(row[7]) if row[7] is not None else True,
+                            }
+                        else:
+                            summary = {
+                                "filename": filename,
+                                "disabled": bool(row[1]),
+                                "permanent_disabled": bool(row[12]) if len(row) > 12 else False,
+                                "error_codes": error_codes,
+                                "last_success": row[3] or current_time,
+                                "user_email": row[4],
+                                "rotation_order": row[5],
+                                "model_cooldowns": active_cooldowns,
+                                "model_disabled": json.loads(row[7] or "{}"),
+                                "tier": row[8] if row[8] is not None else "pro",
+                                "enable_credit": bool(row[9]) if row[9] is not None else False,
+                                "success_count": row[10] or 0,
+                                "failure_count": row[11] or 0,
+                                "cycle_stats": json.loads(row[13] or "{}") if len(row) > 13 else {},
+                                "last_cycle_stats": json.loads(row[14] or "{}") if len(row) > 14 else {},
+                                "remark": row_remark,
+                            }
 
                         if mode == "geminicli":
-                            summary["preview"] = bool(row[7]) if row[7] is not None else True
 
                             if preview_filter:
                                 preview_value = summary.get("preview", True)

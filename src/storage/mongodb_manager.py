@@ -543,6 +543,10 @@ class MongoDBManager:
             if mode == "geminicli" and model_name and "preview" in model_name.lower():
                 match_query["preview"] = True
 
+            # antigravity 支持按模型族禁用：Claude 请求跳过 claude_disabled 凭证
+            if mode == "antigravity" and model_name and "claude" in model_name.lower():
+                match_query["model_disabled.claude"] = {"$ne": True}
+
             # 冷却检查：直接用 MongoDB 查询表达，无需 $addFields
             if model_name:
                 escaped_model_name = self._escape_model_name(model_name)
@@ -559,7 +563,7 @@ class MongoDBManager:
 
             # 随机偏移 + limit(1)，替代 $sample，避免全集合随机排序
             skip_n = random.randint(0, count - 1)
-            projection = {"filename": 1, "credential_data": 1, "enable_credit": 1, "_id": 0}
+            projection = {"filename": 1, "credential_data": 1, "enable_credit": 1, "model_disabled": 1, "_id": 0}
             docs = await collection.find(match_query, projection).skip(skip_n).limit(1).to_list(1)
 
             if docs:
@@ -567,6 +571,7 @@ class MongoDBManager:
                 credential_data = doc.get("credential_data") or {}
                 if mode == "antigravity":
                     credential_data["enable_credit"] = bool(doc.get("enable_credit", False))
+                    credential_data["model_disabled"] = doc.get("model_disabled") or {}
                 return doc["filename"], credential_data
 
             return None
@@ -937,6 +942,7 @@ class MongoDBManager:
                     "last_success": doc.get("last_success", current_time),
                     "user_email": doc.get("user_email"),
                     "model_cooldowns": model_cooldowns,
+                    "model_disabled": doc.get("model_disabled") or {},
                     "preview": doc.get("preview", True),
                     "tier": doc.get("tier", "pro"),
                     "success_count": doc.get("success_count", 0),
@@ -954,6 +960,7 @@ class MongoDBManager:
                 "last_success": current_time,
                 "user_email": None,
                 "model_cooldowns": {},
+                "model_disabled": {},
                 "preview": True,
                 "tier": "pro",
                 "success_count": 0,
@@ -984,6 +991,7 @@ class MongoDBManager:
                 "last_success": 1,
                 "user_email": 1,
                 "model_cooldowns": 1,
+                "model_disabled": 1,
                 "preview": 1,
                 "tier": 1,
                 "enable_credit": 1,
@@ -1015,6 +1023,7 @@ class MongoDBManager:
                     "last_success": doc.get("last_success", time.time()),
                     "user_email": doc.get("user_email"),
                     "model_cooldowns": model_cooldowns,
+                    "model_disabled": doc.get("model_disabled") or {},
                     "preview": doc.get("preview", True),
                     "tier": doc.get("tier", "pro"),
                     "success_count": doc.get("success_count", 0),

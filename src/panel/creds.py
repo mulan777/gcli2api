@@ -285,6 +285,7 @@ async def get_creds_status_common(
             "last_success": summary["last_success"],
             "backend_type": backend_type,
             "model_cooldowns": summary.get("model_cooldowns", {}),
+            "model_disabled": summary.get("model_disabled", {}),
             "tier": summary.get("tier", "pro"),
             "success_count": summary.get("success_count", 0),
             "failure_count": summary.get("failure_count", 0),
@@ -915,6 +916,21 @@ async def creds_action(
                 return JSONResponse(content={"message": f"已关闭凭证信用额度模式 {os.path.basename(filename)}"})
             raise HTTPException(status_code=500, detail="关闭信用额度模式失败，可能凭证不存在")
 
+        elif action in ("disable_claude", "enable_claude"):
+            if mode != "antigravity":
+                raise HTTPException(status_code=400, detail="Claude 单独禁用仅支持 antigravity 模式")
+            disabled = action == "disable_claude"
+            state = await storage_adapter.get_credential_state(filename, mode=mode)
+            model_disabled = dict(state.get("model_disabled") or {})
+            model_disabled["claude"] = disabled
+            updated = await storage_adapter.update_credential_state(
+                filename, {"model_disabled": model_disabled}, mode=mode
+            )
+            if updated:
+                label = "禁用" if disabled else "恢复"
+                return JSONResponse(content={"message": f"已{label}该凭证的 Claude 通道 {os.path.basename(filename)}"})
+            raise HTTPException(status_code=500, detail="更新 Claude 通道状态失败，可能凭证不存在")
+
         else:
             raise HTTPException(status_code=400, detail="无效的操作类型")
 
@@ -1015,6 +1031,21 @@ async def creds_batch_action(
                         success_count += 1
                     else:
                         errors.append(f"{filename}: 关闭信用额度模式失败")
+                        continue
+                elif action in ("disable_claude", "enable_claude"):
+                    if mode != "antigravity":
+                        errors.append(f"{filename}: Claude 单独禁用仅支持 antigravity 模式")
+                        continue
+                    state = await storage_adapter.get_credential_state(filename, mode=mode)
+                    model_disabled = dict(state.get("model_disabled") or {})
+                    model_disabled["claude"] = action == "disable_claude"
+                    updated = await storage_adapter.update_credential_state(
+                        filename, {"model_disabled": model_disabled}, mode=mode
+                    )
+                    if updated:
+                        success_count += 1
+                    else:
+                        errors.append(f"{filename}: 更新 Claude 通道状态失败")
                         continue
                 else:
                     errors.append(f"{filename}: 无效的操作类型")

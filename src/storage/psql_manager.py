@@ -85,6 +85,7 @@ class PSQLManager:
         "last_success",
         "user_email",
         "model_cooldowns",
+        "model_disabled",
         "preview",
         "tier",
         "enable_credit",
@@ -183,6 +184,7 @@ class PSQLManager:
                 user_email TEXT,
 
                 model_cooldowns TEXT DEFAULT '{}',
+                model_disabled TEXT DEFAULT '{}',
                 tier TEXT DEFAULT 'pro',
                 enable_credit INTEGER DEFAULT 0,
 
@@ -290,6 +292,7 @@ class PSQLManager:
                 ("last_success", "DOUBLE PRECISION"),
                 ("user_email", "TEXT"),
                 ("model_cooldowns", "TEXT DEFAULT '{}'"),
+                ("model_disabled", "TEXT DEFAULT '{}'"),
                 ("tier", "TEXT DEFAULT 'pro'"),
                 ("enable_credit", "INTEGER DEFAULT 0"),
                 ("rotation_order", "INTEGER DEFAULT 0"),
@@ -418,7 +421,7 @@ class PSQLManager:
                     return None
                 else:
                     rows = await conn.fetch(f"""
-                        SELECT filename, credential_data, model_cooldowns, enable_credit
+                        SELECT filename, credential_data, model_cooldowns, model_disabled, enable_credit
                         FROM {table_name}
                         WHERE disabled = 0
                         ORDER BY RANDOM()
@@ -431,12 +434,17 @@ class PSQLManager:
                             return rows[0]["filename"], credential_data
                         return None
 
+                    is_claude_model = "claude" in model_name.lower()
                     for row in rows:
+                        model_disabled = json.loads(row["model_disabled"] or "{}")
+                        if is_claude_model and model_disabled.get("claude"):
+                            continue
                         model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
                         cd = model_cooldowns.get(model_name)
                         if cd is None or current_time >= cd:
                             credential_data = json.loads(row["credential_data"])
                             credential_data["enable_credit"] = bool(row["enable_credit"])
+                            credential_data["model_disabled"] = model_disabled
                             return row["filename"], credential_data
 
                     return None
@@ -581,7 +589,7 @@ class PSQLManager:
                 if key in self.STATE_FIELDS:
                     if key == "enable_credit" and mode != "antigravity":
                         continue
-                    if key in ("error_codes", "error_messages", "model_cooldowns"):
+                    if key in ("error_codes", "error_messages", "model_cooldowns", "model_disabled"):
                         set_clauses.append(f"{key} = ${idx}")
                         values.append(json.dumps(value))
                     else:
@@ -657,7 +665,7 @@ class PSQLManager:
                     }
                 else:
                     row = await conn.fetchrow(f"""
-                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
+                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns, model_disabled,
                                tier, enable_credit, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name} WHERE filename = $1
                     """, filename)
@@ -669,6 +677,7 @@ class PSQLManager:
                             "last_success": row["last_success"] or time.time(),
                             "user_email": row["user_email"],
                             "model_cooldowns": json.loads(row["model_cooldowns"] or "{}"),
+                            "model_disabled": json.loads(row["model_disabled"] or "{}"),
                             "tier": row["tier"] if row["tier"] is not None else "pro",
                             "enable_credit": bool(row["enable_credit"]) if row["enable_credit"] is not None else False,
                             "success_count": row["success_count"] or 0,
@@ -685,6 +694,7 @@ class PSQLManager:
                         "last_success": time.time(),
                         "user_email": None,
                         "model_cooldowns": {},
+                        "model_disabled": {},
                         "tier": "pro",
                         "enable_credit": False,
                         "success_count": 0,
@@ -738,7 +748,7 @@ class PSQLManager:
                 else:
                     rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, model_cooldowns, tier, enable_credit,
+                               user_email, model_cooldowns, model_disabled, tier, enable_credit,
                                success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                     """)
@@ -755,6 +765,7 @@ class PSQLManager:
                             "last_success": row["last_success"] or current_time,
                             "user_email": row["user_email"],
                             "model_cooldowns": model_cooldowns,
+                            "model_disabled": json.loads(row["model_disabled"] or "{}"),
                             "tier": row["tier"] if row["tier"] is not None else "pro",
                             "enable_credit": bool(row["enable_credit"]) if row["enable_credit"] is not None else False,
                             "success_count": row["success_count"] or 0,
@@ -828,7 +839,7 @@ class PSQLManager:
                 else:
                     all_rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, rotation_order, model_cooldowns, tier, enable_credit,
+                               user_email, rotation_order, model_cooldowns, model_disabled, tier, enable_credit,
                                success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                         {where_clause}
@@ -890,6 +901,7 @@ class PSQLManager:
                         "user_email": row["user_email"],
                         "rotation_order": row["rotation_order"],
                         "model_cooldowns": active_cooldowns,
+                        "model_disabled": json.loads(row["model_disabled"] or "{}") if mode == "antigravity" else {},
                         "tier": row["tier"] if row["tier"] is not None else "pro",
                         "success_count": row["success_count"] or 0,
                         "failure_count": row["failure_count"] or 0,
