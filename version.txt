@@ -1,4 +1,4 @@
-full_hash=02468e7c6972c8b8b0f5515d66b6f1af017aae1f
-short_hash=02468e7
-message=feat(antigravity): allow disabling Claude per credential
-date=2026-06-21 15:33:35 +0000
+full_hash=0b30f0e78755af70700878d36179154ff1dddb57
+short_hash=0b30f0e
+message=Merge antigravity per-credential Claude disable for v1.6.20
+date=2026-06-21 15:33:38 +0000
