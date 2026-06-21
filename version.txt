@@ -1,4 +1,4 @@
-full_hash=2cd1cc2896a02e2066013b4c583d8632cc79b5a4
-short_hash=2cd1cc2
-message=fix(storage): preserve claude cycle stats helper override
+full_hash=d7d8619a8b2a3728e597d0ef50d5b6c96c5a8d11
+short_hash=d7d8619
+message=chore: release v1.6.16 with version metadata
 date=2026-06-21 08:01:11 +0000
