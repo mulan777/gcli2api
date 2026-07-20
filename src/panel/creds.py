@@ -1690,11 +1690,61 @@ async def configure_preview_channel(
 
         setting_status = setting_response.status_code
 
+        # 调用 Google Cloud API 配置 preview 通道
+        # 根据文档，需要两个步骤：
+        # 1. 创建 Release Channel Setting (EXPERIMENTAL)
+        # 2. 创建 Setting Binding (绑定到目标项目)
+        from src.httpx_client import post_async, get_async
+        import uuid
+
+        # 生成唯一的 ID
+        setting_id = f"preview-setting-{uuid.uuid4().hex[:8]}"
+        binding_id = f"preview-binding-{uuid.uuid4().hex[:8]}"
+
+        base_url = f"https://cloudaicompanion.googleapis.com/v1/projects/{project_id}/locations/global"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+
+        log.info(f"开始配置 preview 通道: {filename} (project_id={project_id})")
+
+        # 步骤 1: 创建 Release Channel Setting
+        setting_url = f"{base_url}/releaseChannelSettings"
+        setting_response = await post_async(
+            url=setting_url,
+            json={"release_channel": "EXPERIMENTAL"},
+            headers=headers,
+            params={"release_channel_setting_id": setting_id},
+            timeout=30.0
+        )
+
+        setting_status = setting_response.status_code
+
         if setting_status == 200 or setting_status == 201:
             log.info(f"步骤 1/2: Release Channel Setting 创建成功 (setting_id={setting_id})")
         elif setting_status == 409:
-            # Setting 已存在，继续下一步
-            log.info(f"步骤 1/2: Release Channel Setting 已存在")
+            # Setting 已存在，需要 LIST 获取真实的 setting_id，否则 Step 2 的 URL 会用错误的 ID
+            log.info(f"步骤 1/2: Release Channel Setting 已存在，正在获取已有 setting_id...")
+            list_response = await get_async(
+                url=setting_url,
+                headers=headers,
+                timeout=30.0
+            )
+            if list_response.status_code == 200:
+                try:
+                    list_data = list_response.json()
+                    settings = list_data.get("releaseChannelSettings", [])
+                    if settings:
+                        existing_name = settings[0].get("name", "")
+                        setting_id = existing_name.split("/")[-1]
+                        log.info(f"步骤 1/2: 获取到已有 setting_id={setting_id}")
+                    else:
+                        log.warning(f"步骤 1/2: LIST 返回空列表，保持随机 setting_id")
+                except Exception as e:
+                    log.warning(f"步骤 1/2: 解析 LIST 响应失败: {e}，保持随机 setting_id")
+            else:
+                log.warning(f"步骤 1/2: LIST 请求失败 (status={list_response.status_code})，保持随机 setting_id")
         else:
             # 步骤 1 失败
             error_text = setting_response.text if hasattr(setting_response, 'text') else ""
@@ -1839,7 +1889,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli") -> JSON
         if mode == "antigravity":
             api_base_url = await get_antigravity_api_url()
             from src.api.antigravity import build_antigravity_headers
-            headers = build_antigravity_headers(access_token, test_model)
+            headers = build_antigravity_headers(access_token)
         else:
             api_base_url = await get_code_assist_endpoint()
             headers = {

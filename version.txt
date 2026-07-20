@@ -1,4 +1,4 @@
-full_hash=0b30f0e78755af70700878d36179154ff1dddb57
-short_hash=0b30f0e
-message=Merge antigravity per-credential Claude disable for v1.6.20
-date=2026-06-21 15:33:38 +0000
+full_hash=763ed4ed797086f179c3a0b3f1a2a849ddc708dc
+short_hash=763ed4e
+message=Merge upstream master for v1.6.21
+date=2026-07-20 13:13:04 +0000
