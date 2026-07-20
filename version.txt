@@ -1,4 +1,4 @@
-full_hash=pending
-short_hash=pending
+full_hash=763ed4ed797086f179c3a0b3f1a2a849ddc708dc
+short_hash=763ed4e
 message=Merge upstream master for v1.6.21
-date=pending
+date=2026-07-20 13:13:04 +0000
