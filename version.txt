@@ -1,4 +1,4 @@
-full_hash=763ed4ed797086f179c3a0b3f1a2a849ddc708dc
-short_hash=763ed4e
-message=Merge upstream master for v1.6.21
-date=2026-07-20 13:13:04 +0000
+full_hash=b9af9ad8100d4df6d68db9a3fa09206fbf240819
+short_hash=b9af9ad
+message=Merge merge-upstream-v1.6.21: upstream sync + GeminiCLI 3.5-flash
+date=2026-07-20 13:13:05 +0000
