@@ -1,4 +1,4 @@
-full_hash=01e670d53a77d33f76b5d686f81d3a66012c38d4
-short_hash=01e670d
-message=chore: release v1.6.22 with version metadata
-date=2026-07-26 05:42:12 +0000
+full_hash=103b8ccdd4ea1bf3d493326e3deaa12f29fb41c9
+short_hash=103b8cc
+message=Merge feat/restore-geminicli-3.5-flash: restore 3.5-flash in /v1/models
+date=2026-07-26 11:07:28 +0000
