@@ -1,4 +1,4 @@
-full_hash=pending
-short_hash=pending
-message=merge upstream + anti refresh client + per-model test
-date=pending
+full_hash=4b0efab98675c5b45261502b729f947674c2b9e6
+short_hash=4b0efab
+message=Merge feat/anti-rt-client-and-quota-test: anti RT client + per-model test + upstream
+date=2026-07-26 05:42:12 +0000
