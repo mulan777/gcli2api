@@ -1876,6 +1876,49 @@ async function testAntigravityCredential(filename) {
     }
 }
 
+
+async function testCredentialModel(filename, model, mode) {
+    try {
+        if (!filename || !model) {
+            showStatus('缺少凭证或模型名，无法测试', 'error');
+            return;
+        }
+        mode = mode || 'geminicli';
+        showStatus(`🧪 正在测试 ${model}（${mode}）...`, 'info');
+
+        const url = `./creds/test-model/${encodeURIComponent(filename)}?mode=${encodeURIComponent(mode)}&model=${encodeURIComponent(model)}`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: getAuthHeaders()
+        });
+        const data = await response.json().catch(() => ({}));
+
+        if (response.status === 200 || data.success) {
+            const msg = `✅ 模型测试成功\n凭证: ${filename}\n模式: ${mode}\n模型: ${model}\n状态: ${data.message || 'OK'} (${data.status_code || response.status})`;
+            showStatus(`✅ ${model} 测试成功`, 'success');
+            showMessageModal('模型测试成功', msg, 'success');
+        } else {
+            let errorDetails = `❌ 模型测试失败\n凭证: ${filename}\n模式: ${mode}\n模型: ${model}\n`;
+            if (data.error) {
+                try {
+                    const errorObj = JSON.parse(data.error);
+                    errorDetails += `\n错误详情:\n${JSON.stringify(errorObj, null, 2)}`;
+                } catch {
+                    errorDetails += `\n错误详情:\n${data.error}`;
+                }
+            } else {
+                errorDetails += `错误码: ${data.status_code || response.status}\n${data.message || ''}`;
+            }
+            showStatus(`❌ ${model} 测试失败 (${data.status_code || response.status})`, 'error');
+            showMessageModal('模型测试失败', errorDetails, 'error');
+        }
+    } catch (error) {
+        const errorMsg = `模型测试失败: ${error.message}`;
+        showStatus(`❌ ${errorMsg}`, 'error');
+        showMessageModal('模型测试失败', `❌ ${errorMsg}`, 'error');
+    }
+}
+
 async function batchTestCredentials(manager, label) {
     const selectedFiles = Array.from(manager.selectedFiles);
     if (selectedFiles.length === 0) {
@@ -2154,14 +2197,29 @@ async function _toggleQuotaDetails(pathId, mode) {
                             else if (usedPercentage >= 70) percentageColor = '#ffc107'; // 黄色：使用较多
                             else if (usedPercentage >= 50) percentageColor = '#17a2b8'; // 蓝色：使用中等
 
+                            const safeModelAttr = String(modelName).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+                            const safeFilenameAttr = String(filename).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+                            const safeModeAttr = String(mode).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
                             quotaHTML += `
                                 <div style="background: white; border-left: 4px solid ${percentageColor}; border-radius: 4px; padding: 8px 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                        <div style="font-weight: bold; color: #333; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 8px;" title="${modelName} - 剩余${remainingPercentage}% - ${resetTime}">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 6px;">
+                                        <div style="font-weight: bold; color: #333; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;" title="${modelName} - 剩余${remainingPercentage}% - ${resetTime}">
                                             ${modelName}
                                         </div>
-                                        <div style="font-size: 13px; font-weight: bold; color: ${percentageColor}; white-space: nowrap;">
-                                            ${remainingPercentage}%
+                                        <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                                            <div style="font-size: 13px; font-weight: bold; color: ${percentageColor}; white-space: nowrap;">
+                                                ${remainingPercentage}%
+                                            </div>
+                                            <button type="button"
+                                                class="cred-btn"
+                                                style="padding: 2px 8px; font-size: 11px; line-height: 1.4; white-space: nowrap;"
+                                                data-filename="${safeFilenameAttr}"
+                                                data-model="${safeModelAttr}"
+                                                data-mode="${safeModeAttr}"
+                                                onclick="testCredentialModel(this.dataset.filename, this.dataset.model, this.dataset.mode)"
+                                                title="测试模型 ${modelName}">
+                                                测试
+                                            </button>
                                         </div>
                                     </div>
                                     <div style="width: 100%; height: 8px; background-color: #e9ecef; border-radius: 4px; overflow: hidden; margin-bottom: 4px;">

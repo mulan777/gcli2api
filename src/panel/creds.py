@@ -23,7 +23,15 @@ from src.models import (
     RefreshTokenBatchAddRequest,
 )
 from src.storage_adapter import get_storage_adapter
-from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
+from src.utils import (
+    verify_panel_token,
+    GEMINICLI_USER_AGENT,
+    ANTIGRAVITY_USER_AGENT,
+    ANTIGRAVITY_CLIENT_ID,
+    ANTIGRAVITY_CLIENT_SECRET,
+    CLIENT_ID as UTILS_GEMINI_CLIENT_ID,
+    CLIENT_SECRET as UTILS_GEMINI_CLIENT_SECRET,
+)
 from src.api.antigravity import fetch_quota_info
 from src.api.utils import check_should_auto_ban
 from src.google_oauth_api import Credentials, fetch_project_id_and_tier, get_user_projects, select_default_project, enable_required_apis
@@ -2058,6 +2066,133 @@ async def test_credential_common(filename: str, mode: str = "geminicli") -> JSON
         raise HTTPException(status_code=500, detail=f"测试失败: {str(e)}")
 
 
+
+async def test_credential_model_common(
+    filename: str,
+    model: str,
+    mode: str = "geminicli",
+) -> JSONResponse:
+    """测试指定凭证 + 指定模型是否可用（不改 preview 状态，不触发二次 preview 探测）。"""
+    try:
+        mode = validate_mode(mode)
+        model = (model or "").strip()
+        if not model:
+            raise HTTPException(status_code=400, detail="model 不能为空")
+        if not filename.endswith(".json"):
+            raise HTTPException(status_code=400, detail="无效的文件名")
+
+        storage_adapter = await get_storage_adapter()
+        credential_data = await storage_adapter.get_credential(filename, mode=mode)
+        if not credential_data:
+            raise HTTPException(status_code=404, detail="凭证不存在")
+
+        credentials = Credentials.from_dict(credential_data)
+        token_refreshed = await credentials.refresh_if_needed()
+        if token_refreshed:
+            log.info(f"Token已自动刷新: {filename} (mode={mode}, model-test={model})")
+            credential_data = credentials.to_dict()
+            await storage_adapter.store_credential(filename, credential_data, mode=mode)
+
+        access_token = credential_data.get("access_token") or credential_data.get("token")
+        if not access_token:
+            raise HTTPException(status_code=400, detail="凭证中没有访问令牌")
+
+        project_id = credential_data.get("project_id", "")
+        if not project_id and mode == "geminicli":
+            raise HTTPException(status_code=400, detail="凭证中没有项目ID")
+
+        if mode == "antigravity":
+            api_base_url = await get_antigravity_api_url()
+            from src.api.antigravity import build_antigravity_headers
+            headers = build_antigravity_headers(access_token)
+        else:
+            api_base_url = await get_code_assist_endpoint()
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "User-Agent": GEMINICLI_USER_AGENT,
+            }
+
+        payload = {
+            "model": model,
+            "project": project_id or "",
+            "request": {
+                "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                "generationConfig": {"maxOutputTokens": 1},
+            },
+        }
+
+        response = await post_async(
+            url=f"{api_base_url}/v1internal:generateContent",
+            json=payload,
+            headers=headers,
+            timeout=30.0,
+        )
+        status_code = response.status_code
+        error_text = response.text if hasattr(response, "text") else ""
+
+        if status_code == 200 or status_code == 429:
+            log.info(
+                f"模型测试成功: {filename} (mode={mode}, model={model}, status={status_code})"
+            )
+            if status_code == 200 and hasattr(storage_adapter._backend, "record_success"):
+                try:
+                    await storage_adapter._backend.record_success(
+                        filename,
+                        model_name=model,
+                        mode=mode,
+                    )
+                except Exception as e:
+                    log.warning(f"record_success 失败: {e}")
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "success": True,
+                    "status_code": status_code,
+                    "message": "测试成功" if status_code == 200 else "限流但仍有效(429)",
+                    "filename": filename,
+                    "model": model,
+                    "mode": mode,
+                },
+            )
+
+        log.warning(
+            f"模型测试失败: {filename} (mode={mode}, model={model}, status={status_code})"
+        )
+        log.error(
+            f"模型测试错误详情 - 文件: {filename}, 模式: {mode}, 模型: {model}, "
+            f"状态码: {status_code}, 错误内容: {error_text}"
+        )
+        return JSONResponse(
+            status_code=status_code if status_code >= 400 else 400,
+            content={
+                "success": False,
+                "status_code": status_code,
+                "message": f"测试失败: HTTP {status_code}",
+                "error": error_text,
+                "filename": filename,
+                "model": model,
+                "mode": mode,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"测试模型失败 {filename}/{model}: {e}")
+        raise HTTPException(status_code=500, detail=f"测试失败: {str(e)}")
+
+
+@router.post("/test-model/{filename}")
+async def test_credential_model(
+    filename: str,
+    model: str,
+    mode: str = "geminicli",
+    _token: str = Depends(verify_panel_token),
+):
+    """测试指定凭证的指定模型。model 通过 query 参数传入。"""
+    return await test_credential_model_common(filename, model=model, mode=mode)
+
+
 @router.post("/test/{filename}")
 async def test_credential(
     filename: str,
@@ -2321,8 +2456,18 @@ async def _add_credential_by_refresh_token(
     mode: str,
 ) -> dict:
     """核心逻辑：换 token + 探测 project + 入库。单个/批量接口共用。"""
-    cid = (client_id or DEFAULT_GEMINI_CLI_CLIENT_ID).strip()
-    csec = (client_secret or DEFAULT_GEMINI_CLI_CLIENT_SECRET).strip()
+    # refresh_token 绑定签发它的 OAuth client：
+    # - antigravity 必须用 ANTIGRAVITY_CLIENT_*
+    # - geminicli 用 Gemini CLI 官方 client
+    # 用户显式传入 client_id/secret 时优先生效
+    if mode == "antigravity":
+        default_cid = ANTIGRAVITY_CLIENT_ID
+        default_csec = ANTIGRAVITY_CLIENT_SECRET
+    else:
+        default_cid = DEFAULT_GEMINI_CLI_CLIENT_ID or UTILS_GEMINI_CLIENT_ID
+        default_csec = DEFAULT_GEMINI_CLI_CLIENT_SECRET or UTILS_GEMINI_CLIENT_SECRET
+    cid = (client_id or default_cid).strip()
+    csec = (client_secret or default_csec).strip()
 
     # 1. 换 access_token
     try:
