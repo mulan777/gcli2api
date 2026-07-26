@@ -1,4 +1,4 @@
-full_hash=4b0efab98675c5b45261502b729f947674c2b9e6
-short_hash=4b0efab
-message=Merge feat/anti-rt-client-and-quota-test: anti RT client + per-model test + upstream
+full_hash=01e670d53a77d33f76b5d686f81d3a66012c38d4
+short_hash=01e670d
+message=chore: release v1.6.22 with version metadata
 date=2026-07-26 05:42:12 +0000
