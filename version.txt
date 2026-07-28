@@ -1,4 +1,4 @@
-full_hash=dabbdb64140cd0f3e00fa6265ee5f79fc820608f
-short_hash=dabbdb6
-message=feat(panel): Antigravity 冷却筛选加「Claude系列未冷却」选项
-date=2026-07-28 17:20:29 +0000
+full_hash=080c52e368dbf575fa2b32e2fe96fbe7d5737efe
+short_hash=080c52e
+message=chore: update version.txt
+date=2026-07-28 17:21:36 +0000
