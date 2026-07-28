@@ -1,4 +1,4 @@
-full_hash=6c352fdd2dd78d72c767056827a141414a591b92
-short_hash=6c352fd
-message=chore: release v1.6.23 with version metadata
-date=2026-07-26 11:07:28 +0000
+full_hash=dabbdb64140cd0f3e00fa6265ee5f79fc820608f
+short_hash=dabbdb6
+message=feat(panel): Antigravity 冷却筛选加「Claude系列未冷却」选项
+date=2026-07-28 17:20:29 +0000
