@@ -1,4 +1,4 @@
-full_hash=080c52e368dbf575fa2b32e2fe96fbe7d5737efe
-short_hash=080c52e
-message=chore: update version.txt
-date=2026-07-28 17:21:36 +0000
+full_hash=8c4309035a2acb1dabc21e8a91e5277bd3148ca3
+short_hash=8c43090
+message=Merge delayed first-token hedging for v1.7
+date=2026-08-01 05:17:23 +0000
