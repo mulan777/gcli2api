@@ -143,6 +143,9 @@ class MongoDBManager:
         try:
             await credentials_collection.create_indexes(geminicli_indexes)
             await antigravity_credentials_collection.create_indexes(antigravity_indexes)
+            await self._db["delayed_hedge_stats"].create_index(
+                [("mode", ASCENDING)], unique=True, name="idx_delayed_hedge_stats_mode"
+            )
             log.debug("MongoDB indexes created successfully")
         except Exception as e:
             # 如果索引已存在，忽略错误
@@ -500,7 +503,8 @@ class MongoDBManager:
     # ============ SQL 方法 ============
 
     async def get_next_available_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
+        self, mode: str = "geminicli", model_name: Optional[str] = None,
+        excluded_filenames: Optional[List[str]] = None,
     ) -> Optional[tuple[str, Dict[str, Any]]]:
         """
         随机获取一个可用凭证（负载均衡）
@@ -519,7 +523,7 @@ class MongoDBManager:
         self._ensure_initialized()
 
         # Redis 快速路径：根据模型名派生过滤标志，直接在 Redis 分桶中筛选
-        if self._redis_enabled:
+        if self._redis_enabled and not excluded_filenames:
             model_lower = model_name.lower() if model_name else ""
             exclude_free = False
             preview_only = mode == "geminicli" and "preview" in model_lower
@@ -538,6 +542,10 @@ class MongoDBManager:
 
             # 构建普通查询（避免 $sample 聚合导致全集合扫描）
             match_query: Dict[str, Any] = {"disabled": False}
+            if excluded_filenames:
+                match_query["filename"] = {
+                    "$nin": [os.path.basename(name) for name in excluded_filenames]
+                }
 
             # preview 模型只允许 preview=True 的凭证
             if mode == "geminicli" and model_name and "preview" in model_name.lower():
@@ -1616,6 +1624,43 @@ class MongoDBManager:
 
         except Exception as e:
             log.error(f"Error recording failure for {filename}: {e}")
+
+    async def get_hedge_stats(self, mode: Optional[str] = None) -> Dict[str, Any]:
+        self._ensure_initialized()
+        match = {"mode": mode} if mode else {}
+        rows = await self._db["delayed_hedge_stats"].find(match, {"_id": 0}).to_list(None)
+        fields = (
+            "triggered", "upstream_requests", "extra_requests",
+            "primary_won", "backup_won", "rescued",
+        )
+        totals = {field: sum(int(row.get(field, 0) or 0) for row in rows) for field in fields}
+        by_mode = {
+            row["mode"]: {field: int(row.get(field, 0) or 0) for field in fields}
+            for row in rows
+        }
+        return {**totals, "by_mode": by_mode}
+
+    async def record_hedge_event(self, mode: str, event: str) -> None:
+        self._ensure_initialized()
+        columns = {
+            "triggered": ("triggered",),
+            "primary_started": ("upstream_requests",),
+            "backup_started": ("upstream_requests", "extra_requests"),
+            "primary_won": ("primary_won",),
+            "backup_won": ("backup_won",),
+            "rescued": ("rescued",),
+        }.get(event)
+        if not columns:
+            return
+        await self._db["delayed_hedge_stats"].update_one(
+            {"mode": mode},
+            {
+                "$inc": {column: 1 for column in columns},
+                "$set": {"updated_at": time.time()},
+                "$setOnInsert": {"mode": mode},
+            },
+            upsert=True,
+        )
 
     async def get_today_stats(self, mode: Optional[str] = None) -> Dict[str, Any]:
         from datetime import datetime, timedelta, timezone

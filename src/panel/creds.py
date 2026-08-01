@@ -2542,6 +2542,33 @@ async def _add_credential_by_refresh_token(
 
 
 # =============================================================================
+# 延迟补位统计
+# =============================================================================
+
+@router.get("/hedge-stats")
+async def get_delayed_hedge_stats(
+    token: str = Depends(verify_panel_token),
+    mode: Optional[str] = None,
+):
+    if mode:
+        mode = validate_mode(mode)
+    storage_adapter = await get_storage_adapter()
+    backend = getattr(storage_adapter, "_backend", None)
+    empty = {
+        "triggered": 0,
+        "upstream_requests": 0,
+        "extra_requests": 0,
+        "primary_won": 0,
+        "backup_won": 0,
+        "rescued": 0,
+        "by_mode": {},
+    }
+    if backend is None or not hasattr(backend, "get_hedge_stats"):
+        return JSONResponse(content={**empty, "note": "当前存储后端不支持补位统计"})
+    return JSONResponse(content=await backend.get_hedge_stats(mode=mode))
+
+
+# =============================================================================
 # 每日调用统计
 # =============================================================================
 

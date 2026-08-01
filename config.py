@@ -35,6 +35,8 @@ ENV_MAPPINGS = {
     "RETRY_429_MAX_RETRIES": "retry_429_max_retries",
     "RETRY_429_ENABLED": "retry_429_enabled",
     "RETRY_429_INTERVAL": "retry_429_interval",
+    "DELAYED_HEDGE_ENABLED": "delayed_hedge_enabled",
+    "DELAYED_HEDGE_TIMEOUT": "delayed_hedge_timeout",
     "ANTI_TRUNCATION_MAX_ATTEMPTS": "anti_truncation_max_attempts",
     "COMPATIBILITY_MODE": "compatibility_mode_enabled",
     "RETURN_THOUGHTS_TO_FRONTEND": "return_thoughts_to_frontend",
@@ -180,6 +182,25 @@ async def get_retry_429_interval() -> float:
             pass
 
     return float(await get_config_value("retry_429_interval", 1))
+
+
+async def get_delayed_hedge_enabled() -> bool:
+    """Whether delayed backup streaming requests are enabled."""
+    env_value = os.getenv("DELAYED_HEDGE_ENABLED")
+    if env_value:
+        return env_value.lower() in ("true", "1", "yes", "on")
+    return bool(await get_config_value("delayed_hedge_enabled", False))
+
+
+async def get_delayed_hedge_timeout() -> float:
+    """Seconds to wait for the primary stream's first non-empty item."""
+    env_value = os.getenv("DELAYED_HEDGE_TIMEOUT")
+    if env_value:
+        try:
+            return float(env_value)
+        except ValueError:
+            pass
+    return float(await get_config_value("delayed_hedge_timeout", 20))
 
 
 async def get_anti_truncation_max_attempts() -> int:

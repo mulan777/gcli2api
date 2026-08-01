@@ -3083,6 +3083,8 @@ function populateConfigForm() {
     document.getElementById('retry429Enabled').checked = Boolean(c.retry_429_enabled);
     setConfigField('retry429MaxRetries', c.retry_429_max_retries || 20);
     setConfigField('retry429Interval', c.retry_429_interval || 0.1);
+    document.getElementById('delayedHedgeEnabled').checked = Boolean(c.delayed_hedge_enabled);
+    setConfigField('delayedHedgeTimeout', c.delayed_hedge_timeout || 20);
 
     document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
@@ -3138,6 +3140,8 @@ async function saveConfig() {
             retry_429_enabled: getChecked('retry429Enabled'),
             retry_429_max_retries: getInt('retry429MaxRetries', 20),
             retry_429_interval: getFloat('retry429Interval', 0.1),
+            delayed_hedge_enabled: getChecked('delayedHedgeEnabled'),
+            delayed_hedge_timeout: getFloat('delayedHedgeTimeout', 20),
             compatibility_mode_enabled: getChecked('compatibilityModeEnabled'),
             return_thoughts_to_frontend: getChecked('returnThoughtsToFrontend'),
             antigravity_stream2nostream: getChecked('antigravityStream2nostream'),
@@ -3760,14 +3764,32 @@ async function refreshTodayStats(mode) {
     const rateEl = document.getElementById('todayStatsRate' + suffix);
     const rpmEl = document.getElementById('todayStatsRpm' + suffix);
     const tbodyEl = document.getElementById('todayStatsByModel' + suffix);
+    const hedgeEl = document.getElementById('hedgeStats' + suffix);
 
     if (!totalEl) return;
 
     try {
-        const url = `./creds/stats-today-by-model?mode=${encodeURIComponent(mode)}`;
-        const resp = await fetch(url, { headers: getAuthHeaders() });
-        const data = await resp.json();
+        const statsUrl = `./creds/stats-today-by-model?mode=${encodeURIComponent(mode)}`;
+        const hedgeUrl = `./creds/hedge-stats?mode=${encodeURIComponent(mode)}`;
+        const [resp, hedgeResp] = await Promise.all([
+            fetch(statsUrl, { headers: getAuthHeaders() }),
+            fetch(hedgeUrl, { headers: getAuthHeaders() })
+        ]);
+        const [data, hedgeData] = await Promise.all([resp.json(), hedgeResp.json()]);
         if (!resp.ok) throw new Error(data.detail || data.error || resp.statusText);
+
+        if (hedgeEl) {
+            if (hedgeResp.ok) {
+                hedgeEl.textContent = `触发 ${Number(hedgeData.triggered || 0).toLocaleString()} / ` +
+                    `上游请求 ${Number(hedgeData.upstream_requests || 0).toLocaleString()} / ` +
+                    `额外请求 ${Number(hedgeData.extra_requests || 0).toLocaleString()} / ` +
+                    `主体胜 ${Number(hedgeData.primary_won || 0).toLocaleString()} / ` +
+                    `备用胜 ${Number(hedgeData.backup_won || 0).toLocaleString()} / ` +
+                    `挽救 ${Number(hedgeData.rescued || 0).toLocaleString()}`;
+            } else {
+                hedgeEl.textContent = '加载失败';
+            }
+        }
 
         const totals = data.totals || { success: 0, failure: 0, total: 0, rpm: 0 };
         const total = Number(totals.total || (totals.success || 0) + (totals.failure || 0));
@@ -3796,6 +3818,7 @@ async function refreshTodayStats(mode) {
         if (rateEl) rateEl.textContent = '-';
         if (rpmEl) rpmEl.textContent = '-';
         if (dateEl) dateEl.textContent = `(加载失败)`;
+        if (hedgeEl) hedgeEl.textContent = '加载失败';
         if (tbodyEl) tbodyEl.innerHTML = `<tr><td colspan="6" style="padding:12px;text-align:center;color:#ffabab;">加载失败: ${err.message}</td></tr>`;
     }
 }

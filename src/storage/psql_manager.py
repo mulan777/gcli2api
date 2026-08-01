@@ -246,6 +246,24 @@ class PSQLManager:
             CREATE INDEX IF NOT EXISTS idx_minute_model_stats_ts ON minute_model_stats(minute_ts)
         """)
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS delayed_hedge_stats (
+                mode TEXT PRIMARY KEY,
+                triggered BIGINT NOT NULL DEFAULT 0,
+                upstream_requests BIGINT NOT NULL DEFAULT 0,
+                extra_requests BIGINT NOT NULL DEFAULT 0,
+                primary_won BIGINT NOT NULL DEFAULT 0,
+                backup_won BIGINT NOT NULL DEFAULT 0,
+                rescued BIGINT NOT NULL DEFAULT 0,
+                updated_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())
+            )
+        """)
+
+        await conn.execute("""
+            ALTER TABLE delayed_hedge_stats
+            ADD COLUMN IF NOT EXISTS upstream_requests BIGINT NOT NULL DEFAULT 0
+        """)
+
         # 索引
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_disabled ON credentials(disabled)
@@ -358,6 +376,55 @@ class PSQLManager:
         self._initialized = False
         log.debug("PostgreSQL storage closed")
 
+    async def record_hedge_event(self, mode: str, event: str) -> None:
+        """Atomically record delayed hedge usage and outcomes."""
+        self._ensure_initialized()
+        columns = {
+            "triggered": ("triggered",),
+            "primary_started": ("upstream_requests",),
+            "backup_started": ("upstream_requests", "extra_requests"),
+            "primary_won": ("primary_won",),
+            "backup_won": ("backup_won",),
+            "rescued": ("rescued",),
+        }.get(event)
+        if not columns:
+            return
+        updates = ", ".join(f"{column} = delayed_hedge_stats.{column} + 1" for column in columns)
+        fields = (
+            "triggered", "upstream_requests", "extra_requests",
+            "primary_won", "backup_won", "rescued",
+        )
+        initial = {name: 1 if name in columns else 0 for name in fields}
+        async with self._pool.acquire() as conn:
+            await conn.execute(f"""
+                INSERT INTO delayed_hedge_stats
+                    (mode, triggered, upstream_requests, extra_requests,
+                     primary_won, backup_won, rescued, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, EXTRACT(EPOCH FROM NOW()))
+                ON CONFLICT (mode) DO UPDATE SET
+                    {updates}, updated_at = EXTRACT(EPOCH FROM NOW())
+            """, mode, initial["triggered"], initial["upstream_requests"],
+                initial["extra_requests"], initial["primary_won"],
+                initial["backup_won"], initial["rescued"])
+
+    async def get_hedge_stats(self, mode: Optional[str] = None) -> Dict[str, Any]:
+        self._ensure_initialized()
+        async with self._pool.acquire() as conn:
+            if mode:
+                rows = await conn.fetch("SELECT * FROM delayed_hedge_stats WHERE mode = $1", mode)
+            else:
+                rows = await conn.fetch("SELECT * FROM delayed_hedge_stats")
+        fields = (
+            "triggered", "upstream_requests", "extra_requests",
+            "primary_won", "backup_won", "rescued",
+        )
+        totals = {field: sum(int(row[field] or 0) for row in rows) for field in fields}
+        by_mode = {
+            row["mode"]: {field: int(row[field] or 0) for field in fields}
+            for row in rows
+        }
+        return {**totals, "by_mode": by_mode}
+
     def _ensure_initialized(self) -> None:
         if not self._initialized or not self._pool:
             raise RuntimeError("PostgreSQL manager not initialized")
@@ -373,7 +440,8 @@ class PSQLManager:
     # ============ 凭证查询方法 ============
 
     async def get_next_available_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
+        self, mode: str = "geminicli", model_name: Optional[str] = None,
+        excluded_filenames: Optional[List[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """随机获取一个可用凭证（负载均衡）"""
         self._ensure_initialized()
@@ -381,15 +449,16 @@ class PSQLManager:
         try:
             table_name = self._get_table_name(mode)
             current_time = time.time()
+            excluded = [os.path.basename(name) for name in (excluded_filenames or [])]
 
             async with self._pool.acquire() as conn:
                 if mode == "geminicli":
                     rows = await conn.fetch(f"""
                         SELECT filename, credential_data, model_cooldowns, preview
                         FROM {table_name}
-                        WHERE disabled = 0
+                        WHERE disabled = 0 AND NOT (filename = ANY($1::text[]))
                         ORDER BY RANDOM()
-                    """)
+                    """, excluded)
 
                     if not model_name:
                         if rows:
@@ -423,9 +492,9 @@ class PSQLManager:
                     rows = await conn.fetch(f"""
                         SELECT filename, credential_data, model_cooldowns, model_disabled, enable_credit
                         FROM {table_name}
-                        WHERE disabled = 0
+                        WHERE disabled = 0 AND NOT (filename = ANY($1::text[]))
                         ORDER BY RANDOM()
-                    """)
+                    """, excluded)
 
                     if not model_name:
                         if rows:

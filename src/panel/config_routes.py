@@ -47,6 +47,8 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["retry_429_max_retries"] = await config.get_retry_429_max_retries()
         current_config["retry_429_enabled"] = await config.get_retry_429_enabled()
         current_config["retry_429_interval"] = await config.get_retry_429_interval()
+        current_config["delayed_hedge_enabled"] = await config.get_delayed_hedge_enabled()
+        current_config["delayed_hedge_timeout"] = await config.get_delayed_hedge_timeout()
         # 抗截断配置
         current_config["anti_truncation_max_attempts"] = await config.get_anti_truncation_max_attempts()
 
@@ -120,6 +122,19 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
                     raise HTTPException(status_code=400, detail="429重试间隔必须在0.01-10秒之间")
             except (ValueError, TypeError):
                 raise HTTPException(status_code=400, detail="429重试间隔必须是有效的数字")
+
+        if "delayed_hedge_enabled" in new_config:
+            if not isinstance(new_config["delayed_hedge_enabled"], bool):
+                raise HTTPException(status_code=400, detail="首字补位开关必须是布尔值")
+
+        if "delayed_hedge_timeout" in new_config:
+            try:
+                timeout = float(new_config["delayed_hedge_timeout"])
+                if timeout < 1 or timeout > 120:
+                    raise HTTPException(status_code=400, detail="首字补位等待时间必须在1-120秒之间")
+                new_config["delayed_hedge_timeout"] = timeout
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="首字补位等待时间必须是有效数字")
 
         if "anti_truncation_max_attempts" in new_config:
             if (

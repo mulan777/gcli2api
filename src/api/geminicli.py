@@ -18,7 +18,12 @@ import json
 from typing import Any, Dict, Optional, Callable, Tuple
 
 from fastapi import Response
-from config import get_code_assist_endpoint, get_auto_ban_error_codes
+from config import (
+    get_code_assist_endpoint,
+    get_auto_ban_error_codes,
+    get_delayed_hedge_enabled,
+    get_delayed_hedge_timeout,
+)
 from log import log
 
 from src.credential_manager import credential_manager
@@ -121,6 +126,81 @@ async def stream_request(
     native: bool = False,
     headers: Optional[Dict[str, str]] = None,
 ):
+    """Run a delayed backup stream when the primary has no first output."""
+    if not await get_delayed_hedge_enabled():
+        async for chunk in _stream_request_once(body, native, headers):
+            yield chunk
+        return
+
+    from src.delayed_hedge import hedge_stream, is_empty_stream_item
+    from src.storage_adapter import get_storage_adapter
+
+    used_files = []
+    model_name = body.get("model", "")
+    primary_credential = await credential_manager.get_valid_credential(
+        mode="geminicli", model_name=model_name
+    )
+    if not primary_credential:
+        yield Response(
+            content=json.dumps({"error": "当前无可用凭证"}),
+            status_code=500,
+            media_type="application/json",
+        )
+        return
+    used_files.append(primary_credential[0])
+
+    def primary_factory():
+        return _stream_request_once(
+            body,
+            native,
+            headers,
+            excluded_filenames=used_files,
+            selected_file=used_files,
+            initial_credential=primary_credential,
+            on_upstream_start=lambda: record_event("primary_started"),
+            upstream_started_event=primary_started,
+        )
+
+    def backup_factory():
+        return _stream_request_once(
+            body,
+            native,
+            headers,
+            excluded_filenames=used_files,
+            selected_file=used_files,
+            on_upstream_start=lambda: record_event("backup_started"),
+        )
+
+    async def record_event(event: str):
+        storage = await get_storage_adapter()
+        backend = getattr(storage, "_backend", None)
+        if backend and hasattr(backend, "record_hedge_event"):
+            await backend.record_hedge_event("geminicli", event)
+
+    primary_started = asyncio.Event()
+
+    async for chunk in hedge_stream(
+        primary_factory,
+        backup_factory,
+        delay_seconds=await get_delayed_hedge_timeout(),
+        is_success=lambda item: not isinstance(item, Response),
+        is_ignorable=lambda item: item in (b"", "") or is_empty_stream_item(item),
+        on_event=record_event,
+        primary_started=primary_started,
+    ):
+        yield chunk
+
+
+async def _stream_request_once(
+    body: Dict[str, Any],
+    native: bool = False,
+    headers: Optional[Dict[str, str]] = None,
+    excluded_filenames: Optional[list[str]] = None,
+    selected_file: Optional[list[str]] = None,
+    on_upstream_start: Optional[Callable[[], Any]] = None,
+    upstream_started_event: Optional[asyncio.Event] = None,
+    initial_credential: Optional[Tuple[str, Dict[str, Any]]] = None,
+):
     """
     流式请求函数
 
@@ -132,16 +212,14 @@ async def stream_request(
     Yields:
         Response对象（错误时）或 bytes流/str流（成功时）
     """
-    # 获取有效凭证
     model_name = body.get("model", "")
-
-    # 1. 获取有效凭证
-    cred_result = await credential_manager.get_valid_credential(
-        mode="geminicli", model_name=model_name
+    cred_result = initial_credential or await credential_manager.get_valid_credential(
+        mode="geminicli",
+        model_name=model_name,
+        excluded_filenames=excluded_filenames,
     )
 
     if not cred_result:
-        # 如果返回值是None，直接返回错误500
         yield Response(
             content=json.dumps({"error": "当前无可用凭证"}),
             status_code=500,
@@ -150,18 +228,16 @@ async def stream_request(
         return
 
     current_file, credential_data = cred_result
+    if selected_file is not None and current_file not in selected_file:
+        selected_file.append(current_file)
 
-    # 2. 构建URL和请求头
     try:
         auth_headers, final_payload, target_url = await prepare_request_headers_and_payload(
             body, credential_data,
             f"{await get_code_assist_endpoint()}/v1internal:streamGenerateContent?alt=sse"
         )
-
-        # 合并自定义headers
         if headers:
             auth_headers.update(headers)
-
     except Exception as e:
         log.error(f"准备请求失败: {e}")
         yield Response(
@@ -171,24 +247,35 @@ async def stream_request(
         )
         return
 
-    # 3. 调用stream_post_async进行请求
     retry_config = await get_retry_config()
     max_retries = retry_config["max_retries"]
     retry_interval = retry_config["retry_interval"]
+    DISABLE_ERROR_CODES = await get_auto_ban_error_codes()
+    last_error_response = None
+    next_cred_task = None
 
-    DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
-    last_error_response = None  # 记录最后一次的错误响应
-    next_cred_task = None  # 预热的下一个凭证任务
+    async def record_upstream_attempt():
+        if on_upstream_start is not None:
+            result = on_upstream_start()
+            if asyncio.iscoroutine(result):
+                await result
 
-    # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
+    def mark_response_started(status_code: int):
+        if status_code == 200 and upstream_started_event is not None:
+            upstream_started_event.set()
+
     async def refresh_credential_fast():
         nonlocal current_file, credential_data, auth_headers, final_payload
         cred_result = await credential_manager.get_valid_credential(
-            mode="geminicli", model_name=model_name
+            mode="geminicli",
+            model_name=model_name,
+            excluded_filenames=excluded_filenames,
         )
         if not cred_result:
             return None
         current_file, credential_data = cred_result
+        if selected_file is not None and current_file not in selected_file:
+            selected_file.append(current_file)
         try:
             # 只更新token和project_id,不重建整个headers和payload
             token = credential_data.get("token") or credential_data.get("access_token", "")
@@ -223,7 +310,9 @@ async def stream_request(
                 url=target_url,
                 body=final_payload,
                 native=native,
-                headers=auth_headers
+                headers=auth_headers,
+                on_request_attempt=record_upstream_attempt,
+                on_response_started=mark_response_started,
             ):
                 # 判断是否是Response对象
                 if isinstance(chunk, Response):
@@ -253,7 +342,9 @@ async def stream_request(
                         if next_cred_task is None and attempt < max_retries:
                             next_cred_task = asyncio.create_task(
                                 credential_manager.get_valid_credential(
-                                    mode="geminicli", model_name=model_name
+                                    mode="geminicli",
+                                    model_name=model_name,
+                                    excluded_filenames=excluded_filenames,
                                 )
                             )
 
@@ -303,7 +394,9 @@ async def stream_request(
                         if next_cred_task is None and attempt < max_retries:
                             next_cred_task = asyncio.create_task(
                                 credential_manager.get_valid_credential(
-                                    mode="geminicli", model_name=model_name
+                                    mode="geminicli",
+                                    model_name=model_name,
+                                    excluded_filenames=excluded_filenames,
                                 )
                             )
 
