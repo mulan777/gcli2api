@@ -5,6 +5,7 @@
 """
 
 from contextlib import asynccontextmanager
+import inspect
 from typing import Any, AsyncGenerator, Dict, Optional
 
 import httpx
@@ -90,9 +91,16 @@ async def stream_post_async(
     body: Dict[str, Any],
     native: bool = False,
     headers: Optional[Dict[str, str]] = None,
+    on_request_attempt=None,
+    on_response_started=None,
     **kwargs,
 ):
     """流式异步POST请求"""
+    if on_request_attempt is not None:
+        result = on_request_attempt()
+        if inspect.isawaitable(result):
+            await result
+
     if _MOCK_STREAM_429:
         from fastapi import Response
         import json
@@ -110,6 +118,11 @@ async def stream_post_async(
                 from fastapi import Response
                 yield Response(await r.aread(), r.status_code, dict(r.headers))
                 return
+
+            if on_response_started is not None:
+                result = on_response_started(r.status_code)
+                if inspect.isawaitable(result):
+                    await result
 
             # 如果native=True，直接返回bytes流
             if native:

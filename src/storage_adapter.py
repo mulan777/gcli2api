@@ -59,6 +59,15 @@ class StorageBackend(Protocol):
         """设置配置项"""
         ...
 
+    async def get_next_available_credential(
+        self,
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
+        excluded_filenames: Optional[List[str]] = None,
+    ) -> Optional[tuple[str, Dict[str, Any]]]:
+        """获取可用凭证，并可排除已使用的凭证。"""
+        ...
+
     async def get_config(self, key: str, default: Any = None) -> Any:
         """获取配置项"""
         ...

@@ -47,7 +47,8 @@ class CredentialManager:
         log.debug("Credential manager closed")
 
     async def get_valid_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
+        self, mode: str = "geminicli", model_name: Optional[str] = None,
+        excluded_filenames: Optional[List[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         获取有效的凭证 - 随机负载均衡版
@@ -57,6 +58,7 @@ class CredentialManager:
         Args:
             mode: 凭证模式 ("geminicli" 或 "antigravity")
             model_name: 完整模型名，用于模型级冷却检查和preview筛选
+            excluded_filenames: 本次请求已经使用、不能再次选择的凭证文件名
                        - geminicli: 完整模型名
                                    - 包含 "preview" 的模型只能使用 preview=True 的凭证
                                    - 不包含 "preview" 的模型优先使用 preview=False 的凭证
@@ -68,7 +70,9 @@ class CredentialManager:
         max_retries = 3
         for attempt in range(max_retries):
             result = await self._storage_adapter._backend.get_next_available_credential(
-                mode=mode, model_name=model_name
+                mode=mode,
+                model_name=model_name,
+                excluded_filenames=excluded_filenames,
             )
 
             # 如果没有可用凭证，直接返回None

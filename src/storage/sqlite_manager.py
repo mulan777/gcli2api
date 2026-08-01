@@ -283,6 +283,26 @@ class SQLiteManager:
             )
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS delayed_hedge_stats (
+                mode TEXT PRIMARY KEY,
+                triggered INTEGER NOT NULL DEFAULT 0,
+                upstream_requests INTEGER NOT NULL DEFAULT 0,
+                extra_requests INTEGER NOT NULL DEFAULT 0,
+                primary_won INTEGER NOT NULL DEFAULT 0,
+                backup_won INTEGER NOT NULL DEFAULT 0,
+                rescued INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL DEFAULT (unixepoch())
+            )
+        """)
+        async with db.execute("PRAGMA table_info(delayed_hedge_stats)") as cursor:
+            hedge_columns = {row[1] for row in await cursor.fetchall()}
+        if "upstream_requests" not in hedge_columns:
+            await db.execute(
+                "ALTER TABLE delayed_hedge_stats "
+                "ADD COLUMN upstream_requests INTEGER NOT NULL DEFAULT 0"
+            )
+
         log.debug("SQLite tables and indexes created")
 
     async def _repair_credential_filenames(self, db: aiosqlite.Connection):
@@ -389,6 +409,63 @@ class SQLiteManager:
         self._initialized = False
         log.debug("SQLite storage closed")
 
+    async def record_hedge_event(self, mode: str, event: str) -> None:
+        """Atomically record delayed hedge usage and outcomes."""
+        self._ensure_initialized()
+        columns = {
+            "triggered": ("triggered",),
+            "primary_started": ("upstream_requests",),
+            "backup_started": ("upstream_requests", "extra_requests"),
+            "primary_won": ("primary_won",),
+            "backup_won": ("backup_won",),
+            "rescued": ("rescued",),
+        }.get(event)
+        if not columns:
+            return
+        updates = ", ".join(f"{column} = {column} + 1" for column in columns)
+        fields = (
+            "triggered", "upstream_requests", "extra_requests",
+            "primary_won", "backup_won", "rescued",
+        )
+        initial = {name: 1 if name in columns else 0 for name in fields}
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(f"""
+                INSERT INTO delayed_hedge_stats
+                    (mode, triggered, upstream_requests, extra_requests,
+                     primary_won, backup_won, rescued, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
+                ON CONFLICT(mode) DO UPDATE SET {updates}, updated_at = unixepoch()
+            """, (mode, initial["triggered"], initial["upstream_requests"],
+                  initial["extra_requests"], initial["primary_won"],
+                  initial["backup_won"], initial["rescued"]))
+            await db.commit()
+
+    async def get_hedge_stats(self, mode: Optional[str] = None) -> Dict[str, Any]:
+        self._ensure_initialized()
+        async with aiosqlite.connect(self._db_path) as db:
+            columns = (
+                "mode, triggered, upstream_requests, extra_requests, "
+                "primary_won, backup_won, rescued"
+            )
+            if mode:
+                cursor = await db.execute(
+                    f"SELECT {columns} FROM delayed_hedge_stats WHERE mode = ?",
+                    (mode,),
+                )
+            else:
+                cursor = await db.execute(f"SELECT {columns} FROM delayed_hedge_stats")
+            rows = await cursor.fetchall()
+        fields = (
+            "triggered", "upstream_requests", "extra_requests",
+            "primary_won", "backup_won", "rescued",
+        )
+        totals = {field: sum(int(row[index + 1] or 0) for row in rows) for index, field in enumerate(fields)}
+        by_mode = {
+            row[0]: {field: int(row[index + 1] or 0) for index, field in enumerate(fields)}
+            for row in rows
+        }
+        return {**totals, "by_mode": by_mode}
+
     def _ensure_initialized(self):
         """确保已初始化"""
         if not self._initialized:
@@ -406,7 +483,8 @@ class SQLiteManager:
     # ============ SQL 方法 ============
 
     async def get_next_available_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
+        self, mode: str = "geminicli", model_name: Optional[str] = None,
+        excluded_filenames: Optional[List[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         随机获取一个可用凭证（负载均衡）
@@ -422,6 +500,7 @@ class SQLiteManager:
 
         try:
             table_name = self._get_table_name(mode)
+            excluded = {os.path.basename(name) for name in (excluded_filenames or [])}
             async with aiosqlite.connect(self._db_path) as db:
                 current_time = time.time()
 
@@ -432,7 +511,7 @@ class SQLiteManager:
                         WHERE disabled = 0
                         ORDER BY RANDOM()
                     """) as cursor:
-                        rows = await cursor.fetchall()
+                        rows = [row for row in await cursor.fetchall() if row[0] not in excluded]
 
                         if not model_name:
                             if rows:
@@ -477,7 +556,7 @@ class SQLiteManager:
                         WHERE disabled = 0
                         ORDER BY RANDOM()
                     """) as cursor:
-                        rows = await cursor.fetchall()
+                        rows = [row for row in await cursor.fetchall() if row[0] not in excluded]
 
                         if not model_name:
                             if rows:
