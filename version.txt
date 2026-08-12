@@ -1,4 +1,4 @@
-full_hash=f1e568ea22325ad5fe528c94d27b4e64f8346b15
-short_hash=f1e568e
-message=chore: release v1.8 with version metadata
-date=2026-08-12 18:30:38 +0000
+full_hash=a4b880003cdc36337462467b941dc1fd3b10e18c
+short_hash=a4b8800
+message=Merge feat/v1.8.1-refresh-filename-and-35flash-thoughts: 批量 refresh 唯一文件名、project 重试、3.5-flash 思考流
+date=2026-08-12 19:25:25 +0000
