@@ -215,7 +215,7 @@ async def parse_and_log_cooldown(
     """
     try:
         error_data = json.loads(error_text)
-        cooldown_until = parse_quota_reset_timestamp(error_data)
+        cooldown_until = parse_quota_reset_timestamp(error_data, mode=mode)
         if cooldown_until:
             log.info(
                 f"[{mode.upper()}] 检测到quota冷却时间: "
@@ -452,7 +452,7 @@ CAPACITY_EXHAUSTED_REASONS = {
 }
 
 
-def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
+def parse_quota_reset_timestamp(error_response: dict, mode: str = "geminicli") -> Optional[float]:
     """
     从Google API错误响应中提取quota重置时间戳
 
@@ -489,6 +489,10 @@ def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
     """
     try:
         error_obj = error_response.get("error", {})
+
+        if mode.lower() == "antigravity" and error_obj.get("status") == "RESOURCE_EXHAUSTED":
+            return None
+
         details = error_obj.get("details", [])
 
         # 收集 ErrorInfo 中的 reason，用于决定是否兜底
