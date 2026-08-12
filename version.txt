@@ -1,4 +1,4 @@
-full_hash=MERGE_PENDING
-short_hash=MERGE
+full_hash=ee4f2b4b5fbdac4bd2fcc7854b249767334731a5
+short_hash=ee4f2b4
 message=Merge upstream su-kaka/gcli2api into v1.7 fork
-date=2026-08-12 18:30:00 +0000
+date=2026-08-12 18:30:38 +0000
