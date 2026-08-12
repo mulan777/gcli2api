@@ -3645,7 +3645,9 @@ async function addCredentialByRefreshToken() {
         let rowsHtml = (data.results || []).map(r => {
             if (r.success) {
                 const tier = r.subscription_tier ? ` <span style="color:#666">[${r.subscription_tier}]</span>` : '';
-                const pid = r.project_id ? ` project=<code>${r.project_id}</code>` : ' <span style="color:#d97706">project_id未探测到</span>';
+                const pid = r.project_id
+                    ? ` project=<code>${r.project_id}</code>`
+                    : ' <span style="color:#d97706">project_id未探测到，后台将再试最多10次</span>';
                 return `<tr style="border-bottom:1px solid #eee;">
                     <td style="padding:6px 8px;color:#28a745;">✅</td>
                     <td style="padding:6px 8px;font-family:monospace;font-size:12px;">${r.refresh_token_preview || ''}</td>

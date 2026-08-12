@@ -3,12 +3,13 @@
 """
 
 import asyncio
+import hashlib
 import io
 import json
 import os
 import time
 import zipfile
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Response, Body
 from fastapi.responses import JSONResponse
@@ -36,6 +37,7 @@ from src.api.antigravity import fetch_quota_info
 from src.api.utils import check_should_auto_ban
 from src.google_oauth_api import Credentials, fetch_project_id_and_tier, get_user_projects, select_default_project, enable_required_apis
 from src.httpx_client import post_async
+from src.task_manager import create_managed_task
 from config import get_code_assist_endpoint, get_antigravity_api_url, get_oauth_proxy_url
 from datetime import datetime, timedelta, timezone
 from .utils import validate_mode
@@ -2483,47 +2485,18 @@ async def _add_credential_by_refresh_token(
             "error": f"refresh_token 无效或网络异常: {e}",
         }
 
-    # 2. 探测 project_id
+    # 2. 探测 project_id（先同步试 1 次；失败则入库后后台再试 10 次）
     pid = (project_id or "").strip() or None
     subscription_tier = None
 
     if not pid:
-        try:
-            if mode == "geminicli":
-                credentials = Credentials.from_dict(credential_data)
-                projects = await get_user_projects(credentials)
-                if projects:
-                    if len(projects) == 1:
-                        pid = projects[0].get("projectId")
-                    else:
-                        pid = await select_default_project(projects)
-            else:
-                api_base_url = await get_antigravity_api_url()
-                user_agent = ANTIGRAVITY_USER_AGENT
-                detected = await fetch_project_id_and_tier(
-                    access_token=credential_data["access_token"],
-                    user_agent=user_agent,
-                    api_base_url=api_base_url,
-                )
-                if detected:
-                    pid = detected[0]
-                    subscription_tier = detected[1] if len(detected) > 1 else None
-        except Exception as e:
-            log.warning(f"自动探测 project_id 失败: {e}")
+        pid, subscription_tier = await _detect_project_id_once(credential_data, mode)
 
     if pid:
         credential_data["project_id"] = pid
 
-    # 3. 生成文件名
-    if custom_filename:
-        base = os.path.basename(custom_filename.strip())
-        if not base.endswith(".json"):
-            base += ".json"
-        filename = base
-    else:
-        stem = pid or f"refresh-{int(time.time() * 1000)}"
-        stem = "".join(c for c in stem if c.isalnum() or c in "-_")
-        filename = f"{stem}.json"
+    # 3. 生成文件名：禁止用 project_id 当文件名，否则同项目多 token 会互相覆盖
+    filename = _build_unique_refresh_filename(refresh_token, custom_filename)
 
     # 4. 入库
     if mode == "antigravity":
@@ -2531,14 +2504,97 @@ async def _add_credential_by_refresh_token(
     else:
         await credential_manager.add_credential(filename, credential_data)
 
-    log.info(f"通过 refresh_token 成功添加凭证: {filename} (mode={mode})")
+    project_id_pending = not bool(pid)
+    if project_id_pending:
+        create_managed_task(
+            _retry_project_id_in_background(filename, mode, max_attempts=10),
+            name=f"retry-project-id:{filename}",
+        )
+        log.info(f"通过 refresh_token 成功添加凭证: {filename} (mode={mode}, project_id 待后台重试)")
+    else:
+        log.info(f"通过 refresh_token 成功添加凭证: {filename} (mode={mode}, project_id={pid})")
 
     return {
         "success": True,
         "filename": filename,
         "project_id": pid,
         "subscription_tier": subscription_tier,
+        "project_id_pending": project_id_pending,
     }
+
+
+def _build_unique_refresh_filename(refresh_token: str, custom_filename: Optional[str]) -> str:
+    """每条 refresh_token 必须有独立文件名，不能用 GCP project_id。"""
+    if custom_filename:
+        base = os.path.basename(custom_filename.strip())
+        if not base.endswith(".json"):
+            base += ".json"
+        return base
+    digest = hashlib.sha1((refresh_token or "").encode("utf-8")).hexdigest()[:10]
+    return f"refresh-{time.time_ns()}-{digest}.json"
+
+
+async def _detect_project_id_once(
+    credential_data: dict,
+    mode: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    """探测一次 project_id / subscription_tier。失败返回 (None, None)。"""
+    try:
+        if mode == "geminicli":
+            credentials = Credentials.from_dict(credential_data)
+            projects = await get_user_projects(credentials)
+            if not projects:
+                return None, None
+            if len(projects) == 1:
+                return projects[0].get("projectId"), None
+            return await select_default_project(projects), None
+
+        api_base_url = await get_antigravity_api_url()
+        detected = await fetch_project_id_and_tier(
+            access_token=credential_data["access_token"],
+            user_agent=ANTIGRAVITY_USER_AGENT,
+            api_base_url=api_base_url,
+        )
+        if not detected:
+            return None, None
+        pid = detected[0]
+        tier = detected[1] if len(detected) > 1 else None
+        return pid, tier
+    except Exception as e:
+        log.warning(f"自动探测 project_id 失败: {e}")
+        return None, None
+
+
+async def _retry_project_id_in_background(filename: str, mode: str, max_attempts: int = 10) -> None:
+    """导入时没探到 project_id，后台最多再试 max_attempts 次，成功则回写同一条凭证。"""
+    for attempt in range(1, max_attempts + 1):
+        await asyncio.sleep(2 if attempt == 1 else min(8, attempt + 1))
+        try:
+            storage = await get_storage_adapter()
+            current = await storage.get_credential(filename, mode=mode)
+            if not current:
+                log.warning(f"后台补探测中止：凭证已不存在 {filename}")
+                return
+            if (current.get("project_id") or "").strip():
+                log.info(f"后台补探测跳过：{filename} 已有 project_id")
+                return
+
+            pid, _tier = await _detect_project_id_once(current, mode)
+            if not pid:
+                log.info(f"后台补探测 project_id 第 {attempt}/{max_attempts} 次未成功: {filename}")
+                continue
+
+            latest = await storage.get_credential(filename, mode=mode)
+            if not latest:
+                log.warning(f"后台补探测中止：回写前凭证已不存在 {filename}")
+                return
+            latest["project_id"] = pid
+            await storage.store_credential(filename, latest, mode=mode)
+            log.info(f"后台补探测 project_id 成功: {filename} -> {pid} (第 {attempt}/{max_attempts} 次)")
+            return
+        except Exception as e:
+            log.warning(f"后台补探测 project_id 第 {attempt}/{max_attempts} 次异常 {filename}: {e}")
+    log.warning(f"后台补探测 project_id 已重试 {max_attempts} 次仍失败: {filename}")
 
 
 # =============================================================================
