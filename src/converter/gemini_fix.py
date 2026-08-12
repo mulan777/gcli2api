@@ -187,8 +187,13 @@ async def normalize_gemini_request(
         thinking_budget = generation_config.get("thinkingConfig", {}).get("thinkingBudget")
         thinking_level = generation_config.get("thinkingConfig", {}).get("thinkingLevel")
 
-    # 假如 is_thinking_model 为真或者思考预算/等级不为空，设置 thinkingConfig
-    if is_thinking_model(model) or thinking_budget is not None or thinking_level is not None:
+    # Gemini 3.5 Flash 基础模型也支持返回思考块。它不带 pro/think 后缀，
+    # 旧逻辑不会创建 thinkingConfig，导致上游内部思考期间前端没有任何 SSE。
+    base_model = get_base_model_name(model)
+    is_gemini_35_flash = base_model == "gemini-3.5-flash"
+
+    # 思考模型、显式思考档位，以及 3.5 Flash 均设置 thinkingConfig
+    if is_thinking_model(model) or thinking_budget is not None or thinking_level is not None or is_gemini_35_flash:
         # 确保 thinkingConfig 存在
         if "thinkingConfig" not in generation_config:
             generation_config["thinkingConfig"] = {}
@@ -205,10 +210,12 @@ async def normalize_gemini_request(
 
         # includeThoughts 逻辑:
         # 1. 如果是 pro 模型，为 return_thoughts
-        # 2. 如果不是 pro 模型，检查是否有思考预算或思考等级
-        base_model = get_base_model_name(model)
+        # 2. 基础 3.5 Flash 默认回传 thought SSE，避免首字空等
+        # 3. 如果不是 pro 模型，检查是否有思考预算或思考等级
         if "pro" in base_model:
             include_thoughts = return_thoughts
+        elif is_gemini_35_flash:
+            include_thoughts = True
         elif "3-flash" in base_model:
             if thinking_level is None:
                 include_thoughts = False
