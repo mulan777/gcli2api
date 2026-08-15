@@ -1,4 +1,4 @@
-full_hash=290a864dc104ac7b21889e1e6ac4b39032c2e5d1
-short_hash=290a864
-message=fix: close OAuth provisioning and credit retry gaps
-date=2026-08-15 12:31:07 +0000
+full_hash=d0bf72a7034b2b84c102e3c1e947d55bbb660ffb
+short_hash=d0bf72a
+message=fix: isolate unverified creds and serialize project creation
+date=2026-08-15 12:45:22 +0000
