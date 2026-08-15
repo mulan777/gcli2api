@@ -1,4 +1,4 @@
-full_hash=4581c9abe6677b09f944ee12c29ea95456ebcd9b
-short_hash=4581c9a
-message=Merge feat/v1.8.2-auto-project-upstream: 自动项目与 Anti 上游更新
-date=2026-08-15 12:21:21 +0000
+full_hash=290a864dc104ac7b21889e1e6ac4b39032c2e5d1
+short_hash=290a864
+message=fix: close OAuth provisioning and credit retry gaps
+date=2026-08-15 12:31:07 +0000
