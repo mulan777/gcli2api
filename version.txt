@@ -1,4 +1,3 @@
-full_hash=a4b880003cdc36337462467b941dc1fd3b10e18c
-short_hash=a4b8800
-message=Merge feat/v1.8.1-refresh-filename-and-35flash-thoughts: 批量 refresh 唯一文件名、project 重试、3.5-flash 思考流
-date=2026-08-12 19:25:25 +0000
+full_hash=PENDING_V1.8.2
+short_hash=PENDING
+message=v1.8.2 pending release metadata
