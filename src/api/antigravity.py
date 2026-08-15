@@ -378,9 +378,25 @@ async def _stream_request_once(
         if status_code == 200 and upstream_started_event is not None:
             upstream_started_event.set()
 
-    # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
+    def apply_credential_to_request(credential_data: Dict[str, Any]) -> bool:
+        """完整应用重试凭证，禁止跨账号继承信用额度开关。"""
+        nonlocal access_token, project_id, enable_credit, auth_headers, final_payload
+        access_token = credential_data.get("access_token") or credential_data.get("token")
+        project_id = credential_data.get("project_id", "")
+        enable_credit = bool(credential_data.get("enable_credit", False))
+        if not access_token or not project_id:
+            return False
+        auth_headers["Authorization"] = f"Bearer {access_token}"
+        final_payload["project"] = project_id
+        if enable_credit:
+            final_payload["enabledCreditTypes"] = ["GOOGLE_ONE_AI"]
+        else:
+            final_payload.pop("enabledCreditTypes", None)
+        return True
+
+    # 内部函数：快速更新凭证，同时同步项目与信用额度开关
     async def refresh_credential_fast():
-        nonlocal current_file, access_token, auth_headers, project_id, final_payload
+        nonlocal current_file
         cred_result = await credential_manager.get_valid_credential(
             mode="antigravity",
             model_name=model_name,
@@ -389,25 +405,12 @@ async def _stream_request_once(
         if not cred_result:
             return None
         current_file, credential_data = cred_result
-        access_token = credential_data.get("access_token") or credential_data.get("token")
-        project_id = credential_data.get("project_id", "")
-        if not access_token:
-            return None
-        # 只更新token和project_id,不重建整个headers和payload
-        auth_headers["Authorization"] = f"Bearer {access_token}"
-        final_payload["project"] = project_id
-        return True
+        return apply_credential_to_request(credential_data) or None
 
     def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
-        nonlocal current_file, access_token, project_id, auth_headers, final_payload
+        nonlocal current_file
         current_file, credential_data = cred_result
-        access_token = credential_data.get("access_token") or credential_data.get("token")
-        project_id = credential_data.get("project_id", "")
-        if not access_token or not project_id:
-            return False
-        auth_headers["Authorization"] = f"Bearer {access_token}"
-        final_payload["project"] = project_id
-        return True
+        return apply_credential_to_request(credential_data)
 
     for attempt in range(max_retries + 1):
         success_recorded = False  # 标记是否已记录成功
@@ -660,34 +663,37 @@ async def non_stream_request(
     last_error_response = None  # 记录最后一次的错误响应
     next_cred_task = None  # 预热的下一个凭证任务
 
-    # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
+    def apply_credential_to_request(credential_data: Dict[str, Any]) -> bool:
+        """完整应用重试凭证，禁止跨账号继承信用额度开关。"""
+        nonlocal access_token, project_id, enable_credit, auth_headers, final_payload
+        access_token = credential_data.get("access_token") or credential_data.get("token")
+        project_id = credential_data.get("project_id", "")
+        enable_credit = bool(credential_data.get("enable_credit", False))
+        if not access_token or not project_id:
+            return False
+        auth_headers["Authorization"] = f"Bearer {access_token}"
+        final_payload["project"] = project_id
+        if enable_credit:
+            final_payload["enabledCreditTypes"] = ["GOOGLE_ONE_AI"]
+        else:
+            final_payload.pop("enabledCreditTypes", None)
+        return True
+
+    # 内部函数：快速更新凭证，同时同步项目与信用额度开关
     async def refresh_credential_fast():
-        nonlocal current_file, access_token, auth_headers, project_id, final_payload
+        nonlocal current_file
         cred_result = await credential_manager.get_valid_credential(
             mode="antigravity", model_name=model_name
         )
         if not cred_result:
             return None
         current_file, credential_data = cred_result
-        access_token = credential_data.get("access_token") or credential_data.get("token")
-        project_id = credential_data.get("project_id", "")
-        if not access_token:
-            return None
-        # 只更新token和project_id,不重建整个headers和payload
-        auth_headers["Authorization"] = f"Bearer {access_token}"
-        final_payload["project"] = project_id
-        return True
+        return apply_credential_to_request(credential_data) or None
 
     def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
-        nonlocal current_file, access_token, project_id, auth_headers, final_payload
+        nonlocal current_file
         current_file, credential_data = cred_result
-        access_token = credential_data.get("access_token") or credential_data.get("token")
-        project_id = credential_data.get("project_id", "")
-        if not access_token or not project_id:
-            return False
-        auth_headers["Authorization"] = f"Bearer {access_token}"
-        final_payload["project"] = project_id
-        return True
+        return apply_credential_to_request(credential_data)
 
     for attempt in range(max_retries + 1):
         need_retry = False  # 标记是否需要重试

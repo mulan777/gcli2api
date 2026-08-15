@@ -690,62 +690,19 @@ async def asyncio_complete_auth_flow(
                         "mode": "antigravity",
                     }
 
-                # 如果需要自动检测项目ID且没有提供项目ID（标准模式）
-                if flow_data.get("auto_project_detection", False) and not project_id:
-                    log.info("标准模式：通过项目列表获取project_id...")
-                    user_projects = await get_user_projects(credentials)
-
-                    if user_projects:
-                        # 如果只有一个项目，自动使用
-                        if len(user_projects) == 1:
-                            # Google API returns projectId in camelCase
-                            project_id = user_projects[0].get("projectId")
-                            if project_id:
-                                flow_data["project_id"] = project_id
-                                log.info(f"自动选择唯一项目: {project_id}")
-                                # 自动启用必需的API服务
-                                log.info("正在自动启用必需的API服务...")
-                                await enable_required_apis(credentials, project_id)
-                        # 如果有多个项目，尝试选择默认项目
-                        else:
-                            project_id = await select_default_project(user_projects)
-                            if project_id:
-                                flow_data["project_id"] = project_id
-                                log.info(f"自动选择默认项目: {project_id}")
-                                # 自动启用必需的API服务
-                                log.info("正在自动启用必需的API服务...")
-                                await enable_required_apis(credentials, project_id)
-                            else:
-                                # 返回项目列表让用户选择
-                                return {
-                                    "success": False,
-                                    "error": "请从以下项目中选择一个",
-                                    "requires_project_selection": True,
-                                    "available_projects": [
-                                        {
-                                            # Google API returns projectId in camelCase
-                                            "project_id": p.get("projectId"),
-                                            "name": p.get("displayName") or p.get("projectId"),
-                                            "projectNumber": p.get("projectNumber"),
-                                        }
-                                        for p in user_projects
-                                    ],
-                                }
-                    else:
-                        # 如果无法获取项目列表，使用默认project_id
-                        project_id = DEFAULT_PROJECT_ID
-                        flow_data["project_id"] = project_id
-                        log.warning(f"无法获取项目列表，使用默认project_id: {project_id}")
-                elif project_id:
-                    # 如果已经有项目ID（手动提供或环境检测），也尝试启用API服务
-                    log.info("正在为已提供的项目ID自动启用必需的API服务...")
-                    await enable_required_apis(credentials, project_id)
-
-                # 如果仍然没有项目ID，返回错误
+                # 标准 GeminiCLI OAuth 与回调 URL/RT 导入共用同一项目准备闭环。
                 if not project_id:
-                    project_id = DEFAULT_PROJECT_ID
+                    log.info("标准模式：通过 Resource Manager v3 获取或创建 project_id...")
+                    project_id = await ensure_geminicli_project(credentials)
                     flow_data["project_id"] = project_id
-                    log.warning(f"仍未获取到project_id，使用默认project_id: {project_id}")
+                if not await enable_required_apis(credentials, project_id):
+                    raise RuntimeError(f"项目 {project_id} 的 Gemini API 启用失败")
+                for attempt in range(1, 9):
+                    if await validate_geminicli_project(credentials, project_id):
+                        break
+                    if attempt == 8:
+                        raise RuntimeError(f"项目 {project_id} 的 GeminiCLI 真实验收失败")
+                    await asyncio.sleep(5)
 
                 # 保存凭证
                 saved_filename = await save_credentials(credentials, project_id)
