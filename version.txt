@@ -1,3 +1,4 @@
-full_hash=PENDING_V1.8.2
-short_hash=PENDING
-message=v1.8.2 pending release metadata
+full_hash=09c9142ba3b0c68f99cbdf57c22b7f2b1ae952b6
+short_hash=09c9142
+message=v1.8.2: GeminiCLI 自动项目与 Anti 上游更新
+date=2026-08-15 12:17:39 +0000
