@@ -35,7 +35,7 @@ from src.utils import (
 )
 from src.api.antigravity import fetch_quota_info
 from src.api.utils import check_should_auto_ban
-from src.google_oauth_api import Credentials, fetch_project_id_and_tier, get_user_projects, select_default_project, enable_required_apis
+from src.google_oauth_api import Credentials, fetch_project_id_and_tier, get_user_projects, select_default_project, enable_required_apis, ensure_geminicli_project, validate_geminicli_project
 from src.httpx_client import post_async
 from src.task_manager import create_managed_task
 from config import get_code_assist_endpoint, get_antigravity_api_url, get_oauth_proxy_url
@@ -2542,12 +2542,18 @@ async def _detect_project_id_once(
     try:
         if mode == "geminicli":
             credentials = Credentials.from_dict(credential_data)
-            projects = await get_user_projects(credentials)
-            if not projects:
-                return None, None
-            if len(projects) == 1:
-                return projects[0].get("projectId"), None
-            return await select_default_project(projects), None
+            project_id = await ensure_geminicli_project(credentials)
+            enabled = await enable_required_apis(credentials, project_id)
+            if not enabled:
+                raise RuntimeError(f"项目 {project_id} 的 Gemini API 启用失败")
+            # 新启用服务可能需要短暂传播；只在真实模型请求成功后写回入池。
+            for attempt in range(1, 9):
+                if await validate_geminicli_project(credentials, project_id):
+                    break
+                if attempt == 8:
+                    raise RuntimeError(f"项目 {project_id} 的 GeminiCLI 真实验收失败")
+                await asyncio.sleep(5)
+            return project_id, None
 
         api_base_url = await get_antigravity_api_url()
         detected = await fetch_project_id_and_tier(
