@@ -19,6 +19,8 @@ from .google_oauth_api import (
     Credentials,
     Flow,
     enable_required_apis,
+    ensure_geminicli_project,
+    validate_geminicli_project,
     fetch_project_id_and_tier,
     get_user_projects,
     select_default_project,
@@ -116,7 +118,7 @@ class _OAuthLibPatcher:
 # 全局状态管理 - 严格限制大小
 auth_flows = {}  # 存储进行中的认证流程
 MAX_AUTH_FLOWS = 20  # 严格限制最大认证流程数
-DEFAULT_PROJECT_ID = "gemini-pro-1751713012-07fc4dfd"
+DEFAULT_PROJECT_ID = None  # 禁止在项目探测失败时绑定不属于当前账号的硬编码项目
 
 
 def cleanup_auth_flows_for_memory():
@@ -851,45 +853,28 @@ async def complete_auth_flow_from_callback_url(
             subscription_tier = None
 
             if not project_id:
-                # 通过项目列表获取项目ID
+                # Resource Manager v3 查找项目；明确无项目时自动创建。
                 try:
-                    log.info("标准模式：通过项目列表获取project_id...")
-                    projects = await get_user_projects(credentials)
-                    if projects:
-                        if len(projects) == 1:
-                            # 只有一个项目，自动使用
-                            # Google API returns projectId in camelCase
-                            detected_project_id = projects[0]["projectId"]
-                            auto_detected = True
-                            log.info(f"自动检测到唯一项目ID: {detected_project_id}")
-                        else:
-                            # 多个项目，自动选择第一个
-                            # Google API returns projectId in camelCase
-                            detected_project_id = projects[0]["projectId"]
-                            auto_detected = True
-                            log.info(
-                                f"检测到{len(projects)}个项目，自动选择第一个: {detected_project_id}"
-                            )
-                            log.debug(f"其他可用项目: {[p['projectId'] for p in projects[1:]]}")
-                    else:
-                        # 没有项目访问权限，使用默认project_id
-                        detected_project_id = DEFAULT_PROJECT_ID
-                        auto_detected = False
-                        log.warning(f"未检测到可访问项目，使用默认project_id: {detected_project_id}")
+                    log.info("标准模式：通过 Resource Manager v3 获取或创建 project_id...")
+                    detected_project_id = await ensure_geminicli_project(credentials)
+                    auto_detected = True
                 except Exception as e:
-                    log.warning(f"获取项目列表失败: {e}，使用默认project_id")
-                    detected_project_id = DEFAULT_PROJECT_ID
-                    auto_detected = False
+                    log.error(f"获取或创建 project_id 失败: {e}")
+                    raise RuntimeError(f"无法准备 Google Cloud 项目: {e}") from e
             else:
                 detected_project_id = project_id
 
-            # 启用必需的API服务
+            # 启用必需的API服务并做真实模型验收
             if detected_project_id:
-                try:
-                    log.info(f"正在为项目 {detected_project_id} 启用必需的API服务...")
-                    await enable_required_apis(credentials, detected_project_id)
-                except Exception as e:
-                    log.warning(f"启用API服务失败: {e}")
+                log.info(f"正在为项目 {detected_project_id} 启用必需的API服务...")
+                if not await enable_required_apis(credentials, detected_project_id):
+                    raise RuntimeError(f"项目 {detected_project_id} 的 Gemini API 启用失败")
+                for attempt in range(1, 9):
+                    if await validate_geminicli_project(credentials, detected_project_id):
+                        break
+                    if attempt == 8:
+                        raise RuntimeError(f"项目 {detected_project_id} 的 GeminiCLI 真实验收失败")
+                    await asyncio.sleep(5)
 
             # 保存凭证
             saved_filename = await save_credentials(credentials, detected_project_id, subscription_tier=subscription_tier)

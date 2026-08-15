@@ -4,6 +4,7 @@ Google OAuth2 认证模块
 
 import time
 import asyncio
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
@@ -11,6 +12,7 @@ from urllib.parse import urlencode
 import jwt
 
 from config import (
+    get_code_assist_endpoint,
     get_googleapis_proxy_url,
     get_oauth_proxy_url,
     get_resource_manager_api_url,
@@ -25,6 +27,113 @@ class TokenError(Exception):
     """Token相关错误"""
 
     pass
+
+
+async def ensure_geminicli_project(credentials: "Credentials") -> str:
+    """使用 Resource Manager v3 查找项目；明确无项目时创建一个。
+
+    查询失败与“没有项目”严格区分，避免 429/403 时误创建项目。
+    """
+    if credentials.is_expired() and credentials.refresh_token:
+        await credentials.refresh()
+
+    headers = {
+        "Authorization": f"Bearer {credentials.access_token}",
+        "Content-Type": "application/json",
+        "User-Agent": "geminicli-oauth/1.0",
+    }
+    base_url = (await get_resource_manager_api_url()).rstrip("/")
+    if credentials.project_id:
+        current = await get_async(
+            f"{base_url}/v3/projects/{credentials.project_id}",
+            headers=headers,
+        )
+        if current.status_code == 200:
+            project = current.json()
+            if project.get("state") == "ACTIVE":
+                log.info(f"继续使用凭证已有项目: {credentials.project_id}")
+                return credentials.project_id
+        log.warning(
+            f"凭证已有项目不可访问或非 ACTIVE: {credentials.project_id} "
+            f"(HTTP {current.status_code})"
+        )
+
+    search = await get_async(
+        f"{base_url}/v3/projects:search",
+        headers=headers,
+        params={"query": "state:ACTIVE", "pageSize": 20},
+    )
+    if search.status_code != 200:
+        raise RuntimeError(f"项目查询失败 (HTTP {search.status_code}): {search.text[:300]}")
+
+    projects = [
+        item for item in search.json().get("projects", [])
+        if item.get("state") == "ACTIVE" and item.get("projectId")
+    ]
+    if projects:
+        project_id = projects[0]["projectId"]
+        log.info(f"Resource Manager v3 检测到项目: {project_id}")
+        return project_id
+
+    project_id = f"gemini-cli-{int(time.time()) % 100000000}-{secrets.token_hex(2)}"
+    created = await post_async(
+        f"{base_url}/v3/projects",
+        headers=headers,
+        json={"projectId": project_id, "displayName": "Gemini CLI Project"},
+    )
+    if created.status_code not in (200, 201):
+        raise RuntimeError(f"项目创建失败 (HTTP {created.status_code}): {created.text[:300]}")
+    operation = created.json().get("name")
+    if not operation:
+        raise RuntimeError("项目创建响应缺少 operation name")
+
+    for _ in range(30):
+        status = await get_async(f"{base_url}/v3/{operation}", headers=headers)
+        if status.status_code != 200:
+            raise RuntimeError(f"项目创建状态查询失败 (HTTP {status.status_code})")
+        data = status.json()
+        if data.get("done"):
+            if data.get("error"):
+                raise RuntimeError(f"项目创建失败: {data['error']}")
+            result = data.get("response", {})
+            ready_project = result.get("projectId")
+            if not ready_project:
+                raise RuntimeError("项目创建完成但未返回 projectId")
+            log.info(f"已自动创建 GeminiCLI 项目: {ready_project}")
+            return ready_project
+        await asyncio.sleep(2)
+    raise RuntimeError("等待项目创建完成超时")
+
+
+async def validate_geminicli_project(credentials: "Credentials", project_id: str) -> bool:
+    """真实调用 GeminiCLI，只有 HTTP 200 才认为项目可入池。"""
+    if credentials.is_expired() and credentials.refresh_token:
+        await credentials.refresh()
+    endpoint = (await get_code_assist_endpoint()).rstrip("/")
+    response = await post_async(
+        f"{endpoint}/v1internal:generateContent",
+        headers={
+            "Authorization": f"Bearer {credentials.access_token}",
+            "Content-Type": "application/json",
+            "User-Agent": "gemini-cli/0.1.12 (linux; x64)",
+        },
+        json={
+            "model": "gemini-2.5-flash",
+            "project": project_id,
+            "request": {
+                "contents": [{"role": "user", "parts": [{"text": "Reply exactly OK"}]}]
+            },
+        },
+        timeout=45.0,
+    )
+    if response.status_code != 200:
+        log.warning(
+            f"GeminiCLI 项目真实验收失败: {project_id} "
+            f"(HTTP {response.status_code}): {response.text[:300]}"
+        )
+        return False
+    log.info(f"GeminiCLI 项目真实验收成功: {project_id}")
+    return True
 
 
 class Credentials:
@@ -405,6 +514,7 @@ async def validate_token(token: str) -> Optional[Dict[str, Any]]:
 async def enable_required_apis(credentials: Credentials, project_id: str) -> bool:
     """自动启用必需的API服务"""
     try:
+        all_enabled = True
         # 确保凭证有效
         if credentials.is_expired() and credentials.refresh_token:
             await credentials.refresh()
@@ -453,14 +563,16 @@ async def enable_required_apis(credentials: Credentials, project_id: str) -> boo
                     else:
                         log.warning(f"⚠️ 启用服务 {service} 时出现警告: {error_data}")
                 else:
+                    all_enabled = False
                     log.warning(
                         f"⚠️ 启用服务 {service} 失败: {enable_response.status_code} - {enable_response.text}"
                     )
 
             except Exception as e:
+                all_enabled = False
                 log.warning(f"⚠️ 启用服务 {service} 时发生异常: {e}")
 
-        return True
+        return all_enabled
 
     except Exception as e:
         log.error(f"启用API服务时发生错误: {e}")
