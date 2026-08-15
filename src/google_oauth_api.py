@@ -23,6 +23,10 @@ from log import log
 from src.httpx_client import get_async, post_async
 
 
+# 单进程内串行化“搜索为空→创建项目”；持锁后会再次查询。
+_geminicli_project_create_lock = asyncio.Lock()
+
+
 class TokenError(Exception):
     """Token相关错误"""
 
@@ -75,34 +79,52 @@ async def ensure_geminicli_project(credentials: "Credentials") -> str:
         log.info(f"Resource Manager v3 检测到项目: {project_id}")
         return project_id
 
-    project_id = f"gemini-cli-{int(time.time()) % 100000000}-{secrets.token_hex(2)}"
-    created = await post_async(
-        f"{base_url}/v3/projects",
-        headers=headers,
-        json={"projectId": project_id, "displayName": "Gemini CLI Project"},
-    )
-    if created.status_code not in (200, 201):
-        raise RuntimeError(f"项目创建失败 (HTTP {created.status_code}): {created.text[:300]}")
-    operation = created.json().get("name")
-    if not operation:
-        raise RuntimeError("项目创建响应缺少 operation name")
+    async with _geminicli_project_create_lock:
+        # 等锁期间其他导入可能已创建完成，必须二次查询，避免重复项目。
+        second_search = await get_async(
+            f"{base_url}/v3/projects:search",
+            headers=headers,
+            params={"query": "state:ACTIVE", "pageSize": 20},
+        )
+        if second_search.status_code != 200:
+            raise RuntimeError(
+                f"项目二次查询失败 (HTTP {second_search.status_code}): {second_search.text[:300]}"
+            )
+        second_projects = [
+            item for item in second_search.json().get("projects", [])
+            if item.get("state") == "ACTIVE" and item.get("projectId")
+        ]
+        if second_projects:
+            return second_projects[0]["projectId"]
 
-    for _ in range(30):
-        status = await get_async(f"{base_url}/v3/{operation}", headers=headers)
-        if status.status_code != 200:
-            raise RuntimeError(f"项目创建状态查询失败 (HTTP {status.status_code})")
-        data = status.json()
-        if data.get("done"):
-            if data.get("error"):
-                raise RuntimeError(f"项目创建失败: {data['error']}")
-            result = data.get("response", {})
-            ready_project = result.get("projectId")
-            if not ready_project:
-                raise RuntimeError("项目创建完成但未返回 projectId")
-            log.info(f"已自动创建 GeminiCLI 项目: {ready_project}")
-            return ready_project
-        await asyncio.sleep(2)
-    raise RuntimeError("等待项目创建完成超时")
+        project_id = f"gemini-cli-{int(time.time()) % 100000000}-{secrets.token_hex(2)}"
+        created = await post_async(
+            f"{base_url}/v3/projects",
+            headers=headers,
+            json={"projectId": project_id, "displayName": "Gemini CLI Project"},
+        )
+        if created.status_code not in (200, 201):
+            raise RuntimeError(f"项目创建失败 (HTTP {created.status_code}): {created.text[:300]}")
+        operation = created.json().get("name")
+        if not operation:
+            raise RuntimeError("项目创建响应缺少 operation name")
+
+        for _ in range(30):
+            status = await get_async(f"{base_url}/v3/{operation}", headers=headers)
+            if status.status_code != 200:
+                raise RuntimeError(f"项目创建状态查询失败 (HTTP {status.status_code})")
+            data = status.json()
+            if data.get("done"):
+                if data.get("error"):
+                    raise RuntimeError(f"项目创建失败: {data['error']}")
+                result = data.get("response", {})
+                ready_project = result.get("projectId")
+                if not ready_project:
+                    raise RuntimeError("项目创建完成但未返回 projectId")
+                log.info(f"已自动创建 GeminiCLI 项目: {ready_project}")
+                return ready_project
+            await asyncio.sleep(2)
+        raise RuntimeError("等待项目创建完成超时")
 
 
 async def validate_geminicli_project(credentials: "Credentials", project_id: str) -> bool:
@@ -561,6 +583,7 @@ async def enable_required_apis(credentials: Credentials, project_id: str) -> boo
                     if "already enabled" in error_data.get("error", {}).get("message", "").lower():
                         log.info(f"✅ 服务 {service} 已经启用")
                     else:
+                        all_enabled = False
                         log.warning(f"⚠️ 启用服务 {service} 时出现警告: {error_data}")
                 else:
                     all_enabled = False

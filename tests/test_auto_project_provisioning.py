@@ -92,6 +92,30 @@ async def test_creates_project_when_v3_search_is_empty(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_second_search_reuses_project_created_by_concurrent_import(monkeypatch):
+    searches = 0
+
+    async def fake_get(url, **kwargs):
+        nonlocal searches
+        if url.endswith("/v3/projects:search"):
+            searches += 1
+            if searches == 1:
+                return FakeResponse(200, {})
+            return FakeResponse(200, {"projects": [{"projectId": "created-by-peer", "state": "ACTIVE"}]})
+        raise AssertionError(f"意外GET: {url}")
+
+    async def fake_post(url, **kwargs):
+        raise AssertionError("二次查询已有项目时不得重复创建")
+
+    monkeypatch.setattr("src.google_oauth_api.get_async", fake_get)
+    monkeypatch.setattr("src.google_oauth_api.post_async", fake_post)
+    monkeypatch.setattr("src.google_oauth_api.get_resource_manager_api_url", lambda: _async_value("https://cloudresourcemanager.googleapis.com"))
+
+    assert await ensure_geminicli_project(Credentials("token")) == "created-by-peer"
+    assert searches == 2
+
+
+@pytest.mark.asyncio
 async def test_v3_search_error_does_not_create_project(monkeypatch):
     async def fake_get(url, **kwargs):
         return FakeResponse(429, {"error": {"status": "RESOURCE_EXHAUSTED"}})
@@ -117,6 +141,24 @@ async def test_enable_required_apis_reports_failure(monkeypatch):
 
     async def fake_post(url, **kwargs):
         return FakeResponse(403, {"error": {"status": "PERMISSION_DENIED"}})
+
+    monkeypatch.setattr("src.google_oauth_api.get_service_usage_api_url", fake_base_url)
+    monkeypatch.setattr("src.google_oauth_api.get_async", fake_get)
+    monkeypatch.setattr("src.google_oauth_api.post_async", fake_post)
+
+    assert await enable_required_apis(Credentials("token"), "project-a") is False
+
+
+@pytest.mark.asyncio
+async def test_enable_required_apis_non_already_enabled_400_is_failure(monkeypatch):
+    async def fake_base_url():
+        return "https://serviceusage.googleapis.com"
+
+    async def fake_get(url, **kwargs):
+        return FakeResponse(200, {"state": "DISABLED"})
+
+    async def fake_post(url, **kwargs):
+        return FakeResponse(400, {"error": {"message": "billing account required"}})
 
     monkeypatch.setattr("src.google_oauth_api.get_service_usage_api_url", fake_base_url)
     monkeypatch.setattr("src.google_oauth_api.get_async", fake_get)

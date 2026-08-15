@@ -413,6 +413,9 @@ async def _stream_request_once(
         return apply_credential_to_request(credential_data)
 
     for attempt in range(max_retries + 1):
+        # 每次真实上游尝试都换新追踪标识，避免跨凭证/重试复用。
+        auth_headers["requestId"] = f"req-{uuid.uuid4()}"
+        final_payload["requestId"] = _generate_request_id()
         success_recorded = False  # 标记是否已记录成功
         need_retry = False  # 标记是否需要重试
 
@@ -696,6 +699,9 @@ async def non_stream_request(
         return apply_credential_to_request(credential_data)
 
     for attempt in range(max_retries + 1):
+        # 每次真实上游尝试都换新追踪标识，避免跨凭证/重试复用。
+        auth_headers["requestId"] = f"req-{uuid.uuid4()}"
+        final_payload["requestId"] = _generate_request_id()
         need_retry = False  # 标记是否需要重试
         
         try:

@@ -2485,11 +2485,26 @@ async def _add_credential_by_refresh_token(
             "error": f"refresh_token 无效或网络异常: {e}",
         }
 
-    # 2. 探测 project_id（先同步试 1 次；失败则入库后后台再试 10 次）
+    # 2. 准备并验收 project_id（失败凭证隔离保存，不进入可用池）
     pid = (project_id or "").strip() or None
     subscription_tier = None
 
-    if not pid:
+    if mode == "geminicli":
+        try:
+            credentials = Credentials.from_dict(credential_data)
+            pid = pid or await ensure_geminicli_project(credentials)
+            if not await enable_required_apis(credentials, pid):
+                raise RuntimeError(f"项目 {pid} 的 Gemini API 启用失败")
+            for attempt in range(1, 9):
+                if await validate_geminicli_project(credentials, pid):
+                    break
+                if attempt == 8:
+                    raise RuntimeError(f"项目 {pid} 的 GeminiCLI 真实验收失败")
+                await asyncio.sleep(5)
+        except Exception as e:
+            log.warning(f"GeminiCLI 凭证暂未通过验收，将隔离后后台重试: {e}")
+            pid = None
+    elif not pid:
         pid, subscription_tier = await _detect_project_id_once(credential_data, mode)
 
     if pid:
@@ -2506,6 +2521,10 @@ async def _add_credential_by_refresh_token(
 
     project_id_pending = not bool(pid)
     if project_id_pending:
+        # 先从轮询池隔离；后台真实验收成功后才重新启用。
+        await credential_manager.update_credential_state(
+            filename, {"disabled": True}, mode=mode
+        )
         create_managed_task(
             _retry_project_id_in_background(filename, mode, max_attempts=10),
             name=f"retry-project-id:{filename}",
@@ -2596,6 +2615,9 @@ async def _retry_project_id_in_background(filename: str, mode: str, max_attempts
                 return
             latest["project_id"] = pid
             await storage.store_credential(filename, latest, mode=mode)
+            await storage.update_credential_state(
+                filename, {"disabled": False}, mode=mode
+            )
             log.info(f"后台补探测 project_id 成功: {filename} -> {pid} (第 {attempt}/{max_attempts} 次)")
             return
         except Exception as e:
