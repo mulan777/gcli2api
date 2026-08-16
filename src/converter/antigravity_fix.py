@@ -589,6 +589,9 @@ ANTIGRAVITY_NATIVE_MODEL_IDS = {
     "gemini-3.5-flash-low",
     "gemini-3.5-flash-extra-low",
     "gemini-3.5-flash-high",
+    "gemini-3.7-flash-low",
+    "gemini-3.7-flash-medium",
+    "gemini-3.7-flash-high",
     "gemini-3-flash-agent",
     "gemini-pro-agent",
     "gpt-oss-120b-medium",
@@ -598,6 +601,80 @@ ANTIGRAVITY_NATIVE_MODEL_IDS = {
 def is_thinking_model(model_name: str) -> bool:
     """检查是否为思考模型 (模型名包含 think)"""
     return "think" in model_name.lower()
+
+
+def normalize_antigravity_cooldown_key(model_name: str) -> str:
+    """将模型名归一化为共享额度/CD键，不改变实际请求模型名。"""
+    model = str(model_name or "").strip().lower()
+    if (
+        model.startswith("gemini-3.1-pro")
+        or model.startswith("gemini-3.5-flash")
+        or model.startswith("gemini-3.6-flash")
+        or model.startswith("gemini-3.7-flash")
+    ):
+        return "gemini-shared"
+    if model.startswith("claude-") or model.startswith("gpt-oss-"):
+        return "claude-gpt-shared"
+    return model
+
+def clear_antigravity_cooldown_family(cooldowns: dict, model_name: str) -> dict:
+    """清除目标共享额度族的新共享键和全部历史具体键。"""
+    source = dict(cooldowns or {})
+    target = normalize_antigravity_cooldown_key(model_name)
+    return {
+        key: value
+        for key, value in source.items()
+        if normalize_antigravity_cooldown_key(key) != target
+    }
+
+
+def get_antigravity_cooldown_until(cooldowns: dict, model_name: str):
+    """读取共享键与旧具体键，兼容历史 CD 状态并返回最晚截止时间。"""
+    if not isinstance(cooldowns, dict):
+        return None
+    model = str(model_name or "").strip().lower()
+    shared_key = normalize_antigravity_cooldown_key(model)
+    candidates = []
+    if shared_key in cooldowns:
+        candidates.append(cooldowns[shared_key])
+    for key, value in cooldowns.items():
+        lowered = str(key).lower()
+        same_family = (
+            shared_key == "gemini-shared"
+            and (
+                lowered.startswith("gemini-3.1-pro")
+                or lowered.startswith("gemini-3.5-flash")
+                or lowered.startswith("gemini-3.6-flash")
+                or lowered.startswith("gemini-3.7-flash")
+            )
+        ) or (
+            shared_key == "claude-gpt-shared"
+            and (lowered.startswith("claude-") or lowered.startswith("gpt-oss-"))
+        )
+        if same_family:
+            candidates.append(value)
+    numeric = []
+    for value in candidates:
+        try:
+            numeric.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return max(numeric) if numeric else None
+
+
+def normalize_antigravity_model_name(model_name: str) -> str:
+    """将外部 Antigravity 模型别名归一化为上游真实模型 ID。"""
+    model = str(model_name or "").strip()
+    lowered = model.lower()
+    if "claude" not in lowered:
+        return model
+    if "opus" in lowered:
+        return "claude-opus-4-6-thinking"
+    if "sonnet" in lowered:
+        return "claude-sonnet-4-6"
+    if "haiku" in lowered:
+        return "gemini-2.5-flash"
+    return "claude-sonnet-4-6"
 
 
 def _normalize_antigravity_request(
@@ -678,19 +755,9 @@ def _normalize_antigravity_request(
                         break
 
     if "claude" in model.lower():
-        # 2. Claude 模型关键词映射
-        # 使用关键词匹配而不是精确匹配，更灵活地处理各种变体
+        # 2. Claude 模型关键词映射（与调度/CD 共用同一规范模型名）
         original_model = model
-        if "opus" in model.lower():
-            model = "claude-opus-4-6-thinking"
-        elif "sonnet" in model.lower():
-            model = "claude-sonnet-4-6"
-        elif "haiku" in model.lower():
-            model = "gemini-2.5-flash"
-        elif "claude" in model.lower():
-            # Claude 模型兜底：如果包含 claude 但不是 opus/sonnet/haiku
-            model = "claude-sonnet-4-6"
-
+        model = normalize_antigravity_model_name(model)
         if original_model != model:
             log.debug(f"[ANTIGRAVITY] 映射模型: {original_model} -> {model}")
 
