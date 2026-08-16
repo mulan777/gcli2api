@@ -452,6 +452,49 @@ CAPACITY_EXHAUSTED_REASONS = {
 }
 
 
+def upgrade_short_antigravity_rate_limit_cooldown(
+    error_response: dict,
+    cooldown_until: Optional[float],
+    quota_models: dict,
+    cooldown_key: str,
+    *,
+    now: Optional[float] = None,
+) -> Optional[float]:
+    """将异常短 RATE_LIMIT CD升级到共享额度族的真实 resetTime。"""
+    import time as _time
+    from datetime import datetime as _dt
+    from src.converter.antigravity_fix import normalize_antigravity_cooldown_key
+
+    current = _time.time() if now is None else float(now)
+    if cooldown_until is not None and float(cooldown_until) >= current + 60:
+        return cooldown_until
+    error_obj = (error_response or {}).get("error", error_response or {})
+    details = error_obj.get("details") or []
+    reasons = {
+        detail.get("reason")
+        for detail in details
+        if isinstance(detail, dict) and detail.get("reason")
+    }
+    if "RATE_LIMIT_EXCEEDED" not in reasons:
+        return cooldown_until
+
+    resets = []
+    for model_name, model_data in (quota_models or {}).items():
+        if normalize_antigravity_cooldown_key(model_name) != cooldown_key:
+            continue
+        quota = (model_data or {}).get("quotaInfo") or {}
+        raw = quota.get("resetTime") or ""
+        if not raw:
+            continue
+        try:
+            ts = _dt.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        if ts >= current + 60:
+            resets.append(ts)
+    return max(resets) if resets else cooldown_until
+
+
 def parse_quota_reset_timestamp(error_response: dict, mode: str = "geminicli") -> Optional[float]:
     """
     从Google API错误响应中提取quota重置时间戳
@@ -489,9 +532,6 @@ def parse_quota_reset_timestamp(error_response: dict, mode: str = "geminicli") -
     """
     try:
         error_obj = error_response.get("error", {})
-
-        if mode.lower() == "antigravity" and error_obj.get("status") == "RESOURCE_EXHAUSTED":
-            return None
 
         details = error_obj.get("details", [])
 
@@ -540,6 +580,9 @@ def parse_quota_reset_timestamp(error_response: dict, mode: str = "geminicli") -
         if error_obj.get("status") == "RESOURCE_EXHAUSTED":
             if reasons & CAPACITY_EXHAUSTED_REASONS and "QUOTA_EXHAUSTED" not in reasons:
                 # 服务端容量问题：让调度器自然重试，不写入冷却
+                return None
+            if mode.lower() == "antigravity" and not reasons:
+                # 裸 Antigravity 429 没有原因或重置点时，不误锁整个额度族。
                 return None
             return _time.time() + RESOURCE_EXHAUSTED_COOLDOWN_HOURS * 3600
 

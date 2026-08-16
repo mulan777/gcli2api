@@ -4,6 +4,7 @@ from src.converter.antigravity_fix import (
     _ensure_empty_tool_schema_for_claude,
     normalize_antigravity_request,
 )
+from src.utils import ANTIGRAVITY_USER_AGENT, normalize_antigravity_model_alias
 
 
 def test_antigravity_claude_tools_keep_schema_in_parameters():
@@ -35,6 +36,9 @@ def test_antigravity_claude_tools_keep_schema_in_parameters():
     [
         ("gemini-3.1-pro-high", "gemini-3.1-pro"),
         ("gemini-3.5-flash-high", "gemini-3.5-flash"),
+        ("gemini-3.7-flash-low", "gemini-3.7-flash"),
+        ("gemini-3.7-flash-medium", "gemini-3.7-flash"),
+        ("gemini-3.7-flash-high", "gemini-3.7-flash"),
     ],
 )
 async def test_normalize_antigravity_keeps_native_model_ids(model_id, stripped, monkeypatch):
@@ -50,3 +54,39 @@ async def test_normalize_antigravity_keeps_native_model_ids(model_id, stripped, 
 
     assert result["model"] == model_id
     assert result["model"] != stripped
+
+
+def test_antigravity_uses_version_gated_cli_fingerprint():
+    assert ANTIGRAVITY_USER_AGENT == (
+        "antigravity/cli/1.1.12 "
+        "(aidev_client; os_type=windows; arch=amd64)"
+    )
+
+
+def test_antigravity_bare_gemini_37_defaults_to_medium_wire_id():
+    assert normalize_antigravity_model_alias("gemini-3.7-flash") == (
+        "gemini-3.7-flash-medium"
+    )
+    for effort in ("low", "medium", "high"):
+        model_id = f"gemini-3.7-flash-{effort}"
+        assert normalize_antigravity_model_alias(model_id) == model_id
+
+
+@pytest.mark.asyncio
+async def test_gemini_37_drops_trailing_model_turn(monkeypatch):
+    monkeypatch.setenv("RETURN_THOUGHTS_TO_FRONTEND", "true")
+
+    result = await normalize_antigravity_request(
+        {
+            "model": "gemini-3.7-flash-medium",
+            "contents": [
+                {"role": "user", "parts": [{"text": "first question"}]},
+                {"role": "model", "parts": [{"text": "previous answer"}]},
+            ],
+            "generationConfig": {},
+        }
+    )
+
+    assert result["contents"] == [
+        {"role": "user", "parts": [{"text": "first question"}]}
+    ]

@@ -24,7 +24,11 @@ from log import log
 from src.credential_manager import credential_manager
 from src.httpx_client import stream_post_async, post_async
 from src.models import Model, model_to_dict
-from src.utils import ANTIGRAVITY_USER_AGENT
+from src.utils import ANTIGRAVITY_USER_AGENT, normalize_antigravity_model_alias
+from src.converter.antigravity_fix import (
+    normalize_antigravity_cooldown_key,
+    normalize_antigravity_model_name,
+)
 
 # 导入共同的基础功能
 from src.api.utils import (
@@ -34,11 +38,63 @@ from src.api.utils import (
     record_api_call_error,
     parse_and_log_cooldown,
     collect_streaming_response,
+    upgrade_short_antigravity_rate_limit_cooldown,
 )
 
 # ==================== 全局凭证管理器 ====================
 
 # 使用全局单例 credential_manager，自动初始化
+
+
+def antigravity_stats_model_name(model_name: str) -> str:
+    """返回用于调用统计的真实模型名，与共享额度/CD键严格分离。"""
+    aliased = normalize_antigravity_model_alias(model_name)
+    return normalize_antigravity_model_name(aliased)
+
+
+async def _maybe_upgrade_short_rate_limit_cooldown(
+    error_text: str,
+    cooldown_until: Optional[float],
+    auth_headers: Dict[str, str],
+    cooldown_key: str,
+) -> Optional[float]:
+    """短 RATE_LIMIT CD时补查原始额度，将其升级到共享族真实重置时间。"""
+    import time
+
+    if not error_text:
+        return cooldown_until
+    if cooldown_until is not None and cooldown_until >= time.time() + 60:
+        return cooldown_until
+    try:
+        error_data = json.loads(error_text)
+        details = (error_data.get("error") or error_data).get("details") or []
+        if not any(
+            isinstance(detail, dict) and detail.get("reason") == "RATE_LIMIT_EXCEEDED"
+            for detail in details
+        ):
+            return cooldown_until
+        antigravity_url = await get_antigravity_api_url()
+        response = await post_async(
+            url=f"{antigravity_url}/v1internal:fetchAvailableModels",
+            json={},
+            headers=auth_headers,
+            timeout=30.0,
+        )
+        if response.status_code != 200:
+            return cooldown_until
+        quota_models = (response.json() or {}).get("models", {})
+        upgraded = upgrade_short_antigravity_rate_limit_cooldown(
+            error_data, cooldown_until, quota_models, cooldown_key
+        )
+        if upgraded and (not cooldown_until or upgraded > cooldown_until + 60):
+            log.info(
+                f"[ANTIGRAVITY] 短限流CD已升级到共享额度重置时间: "
+                f"model_name={cooldown_key}, cooldown_until={datetime.fromtimestamp(upgraded, timezone.utc).isoformat()}"
+            )
+        return upgraded
+    except Exception as exc:
+        log.warning(f"[ANTIGRAVITY] 短限流CD补查额度失败，保留原CD: {exc}")
+        return cooldown_until
 
 
 def _extract_first_user_text(request_payload: Dict[str, Any]) -> str:
@@ -239,8 +295,10 @@ async def stream_request(
 
     used_files = []
     model_name = body.get("model", "")
+    cooldown_model_name = normalize_antigravity_model_name(model_name)
+    cooldown_key = normalize_antigravity_cooldown_key(model_name)
     primary_credential = await credential_manager.get_valid_credential(
-        mode="antigravity", model_name=model_name
+        mode="antigravity", model_name=cooldown_key
     )
     if not primary_credential:
         yield Response(
@@ -315,11 +373,14 @@ async def _stream_request_once(
         Response对象（错误时）或 bytes流/str流（成功时）
     """
     model_name = body.get("model", "")
+    cooldown_model_name = normalize_antigravity_model_name(model_name)
+    cooldown_key = normalize_antigravity_cooldown_key(model_name)
+    stats_model_name = antigravity_stats_model_name(model_name)
 
     # 1. 获取有效凭证
     cred_result = initial_credential or await credential_manager.get_valid_credential(
         mode="antigravity",
-        model_name=model_name,
+        model_name=cooldown_key,
         excluded_filenames=excluded_filenames,
     )
 
@@ -399,7 +460,7 @@ async def _stream_request_once(
         nonlocal current_file
         cred_result = await credential_manager.get_valid_credential(
             mode="antigravity",
-            model_name=model_name,
+            model_name=cooldown_key,
             excluded_filenames=excluded_filenames,
         )
         if not cred_result:
@@ -449,6 +510,9 @@ async def _stream_request_once(
                         if (status_code == 429 or status_code == 503) and error_body:
                             try:
                                 cooldown_until = await parse_and_log_cooldown(error_body, mode="antigravity")
+                                cooldown_until = await _maybe_upgrade_short_rate_limit_cooldown(
+                                    error_body, cooldown_until, auth_headers, cooldown_key
+                                )
                             except Exception:
                                 pass
 
@@ -457,7 +521,7 @@ async def _stream_request_once(
                             next_cred_task = asyncio.create_task(
                                 credential_manager.get_valid_credential(
                                     mode="antigravity",
-                                    model_name=model_name,
+                                    model_name=cooldown_key,
                                     excluded_filenames=excluded_filenames,
                                 )
                             )
@@ -465,7 +529,7 @@ async def _stream_request_once(
                         # 记录错误并切换凭证
                         await record_api_call_error(
                             credential_manager, current_file, status_code,
-                            cooldown_until, mode="antigravity", model_name=model_name,
+                            cooldown_until, mode="antigravity", model_name=stats_model_name,
                             error_message=error_body
                         )
 
@@ -489,7 +553,7 @@ async def _stream_request_once(
                         log.error(f"[ANTIGRAVITY STREAM] 流式请求失败，非重试错误码 (status={status_code}), 凭证: {current_file}, 响应: {error_body[:500] if error_body else '无'}")
                         await record_api_call_error(
                             credential_manager, current_file, status_code,
-                            None, mode="antigravity", model_name=model_name,
+                            None, mode="antigravity", model_name=stats_model_name,
                             error_message=error_body
                         )
                         yield chunk
@@ -499,7 +563,7 @@ async def _stream_request_once(
                     # 只在第一个chunk时记录成功
                     if not success_recorded:
                         await record_api_call_success(
-                            credential_manager, current_file, mode="antigravity", model_name=model_name
+                            credential_manager, current_file, mode="antigravity", model_name=stats_model_name
                         )
                         success_recorded = True
                         log.debug(f"[ANTIGRAVITY STREAM] 开始接收流式响应，模型: {model_name}")
@@ -521,7 +585,7 @@ async def _stream_request_once(
                 log.warning(f"[ANTIGRAVITY STREAM] 收到空回复，无任何内容，凭证: {current_file}")
                 await record_api_call_error(
                     credential_manager, current_file, 200,
-                    None, mode="antigravity", model_name=model_name,
+                    None, mode="antigravity", model_name=stats_model_name,
                     error_message="Empty response from API"
                 )
                 
@@ -619,10 +683,13 @@ async def non_stream_request(
     log.debug("[ANTIGRAVITY] 使用传统非流式模式")
 
     model_name = body.get("model", "")
+    cooldown_model_name = normalize_antigravity_model_name(model_name)
+    cooldown_key = normalize_antigravity_cooldown_key(model_name)
+    stats_model_name = antigravity_stats_model_name(model_name)
 
     # 1. 获取有效凭证
     cred_result = await credential_manager.get_valid_credential(
-        mode="antigravity", model_name=model_name
+        mode="antigravity", model_name=cooldown_key
     )
 
     if not cred_result:
@@ -686,7 +753,7 @@ async def non_stream_request(
     async def refresh_credential_fast():
         nonlocal current_file
         cred_result = await credential_manager.get_valid_credential(
-            mode="antigravity", model_name=model_name
+            mode="antigravity", model_name=cooldown_key
         )
         if not cred_result:
             return None
@@ -722,7 +789,7 @@ async def non_stream_request(
                     # 记录错误
                     await record_api_call_error(
                         credential_manager, current_file, 200,
-                        None, mode="antigravity", model_name=model_name,
+                        None, mode="antigravity", model_name=stats_model_name,
                         error_message="Empty response from API"
                     )
                     
@@ -738,7 +805,7 @@ async def non_stream_request(
                 else:
                     # 正常响应
                     await record_api_call_success(
-                        credential_manager, current_file, mode="antigravity", model_name=model_name
+                        credential_manager, current_file, mode="antigravity", model_name=stats_model_name
                     )
                     return Response(
                         content=response.content,
@@ -770,6 +837,9 @@ async def non_stream_request(
                     if (status_code == 429 or status_code == 503) and error_text:
                         try:
                             cooldown_until = await parse_and_log_cooldown(error_text, mode="antigravity")
+                            cooldown_until = await _maybe_upgrade_short_rate_limit_cooldown(
+                                error_text, cooldown_until, auth_headers, cooldown_key
+                            )
                         except Exception:
                             pass
 
@@ -777,14 +847,14 @@ async def non_stream_request(
                     if next_cred_task is None and attempt < max_retries:
                         next_cred_task = asyncio.create_task(
                             credential_manager.get_valid_credential(
-                                mode="antigravity", model_name=model_name
+                                mode="antigravity", model_name=cooldown_key
                             )
                         )
 
                     # 记录错误并切换凭证
                     await record_api_call_error(
                         credential_manager, current_file, status_code,
-                        cooldown_until, mode="antigravity", model_name=model_name,
+                        cooldown_until, mode="antigravity", model_name=stats_model_name,
                         error_message=error_text
                     )
 
@@ -806,7 +876,7 @@ async def non_stream_request(
                     log.error(f"[ANTIGRAVITY] 非流式请求失败，非重试错误码 (status={status_code}), 凭证: {current_file}, 响应: {error_text[:500] if error_text else '无'}")
                     await record_api_call_error(
                         credential_manager, current_file, status_code,
-                        None, mode="antigravity", model_name=model_name,
+                        None, mode="antigravity", model_name=stats_model_name,
                         error_message=error_text
                     )
                     return last_error_response

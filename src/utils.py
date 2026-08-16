@@ -24,10 +24,14 @@ def get_geminicli_user_agent(model: str = "") -> str:
 # 静态常量
 GEMINICLI_USER_AGENT = get_geminicli_user_agent()
 
-# Antigravity CLI 客户端仿真常量
+# Antigravity CLI 客户端仿真常量。Cloud Code Assist 会按该指纹门控新模型。
 ANTIGRAVITY_CLI_VERSION = "1.1.12"
-ANTIGRAVITY_CLI_PLATFORM = "windows/amd64"
-ANTIGRAVITY_USER_AGENT = f"antigravity/cli/{ANTIGRAVITY_CLI_VERSION} {ANTIGRAVITY_CLI_PLATFORM}"
+ANTIGRAVITY_CLI_OS = "windows"
+ANTIGRAVITY_CLI_ARCH = "amd64"
+ANTIGRAVITY_USER_AGENT = (
+    f"antigravity/cli/{ANTIGRAVITY_CLI_VERSION} "
+    f"(aidev_client; os_type={ANTIGRAVITY_CLI_OS}; arch={ANTIGRAVITY_CLI_ARCH})"
+)
 
 # OAuth Configuration - 标准模式
 CLIENT_ID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
@@ -85,6 +89,7 @@ ANTIGRAVITY_MODEL_ALIASES = {
     # still hit real upstream model IDs.
     "gemini-3.1-pro": "gemini-3.1-pro-high",
     "gemini-3.5-flash": "gemini-3.5-flash-low",
+    "gemini-3.7-flash": "gemini-3.7-flash-medium",
     "gpt-oss-120b": "gpt-oss-120b-medium",
 }
 

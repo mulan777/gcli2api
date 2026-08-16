@@ -12,6 +12,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import asyncpg
 
 from log import log
+from src.converter.antigravity_fix import (
+    clear_antigravity_cooldown_family,
+    get_antigravity_cooldown_until,
+    normalize_antigravity_cooldown_key,
+)
 
 
 def _today_beijing_str() -> str:
@@ -22,6 +27,8 @@ def _today_beijing_str() -> str:
 # 模型家族归一化：各种变种（-search / -thinking / -lite / preview / pro / flash 等）
 # 会被映射到其基础系列。按“更特殊在前”的顺序匹配。
 MODEL_FAMILY_RULES = [
+    # 3.7 系（Antigravity low / medium / high / tiered 共用同一统计家族）
+    ("gemini-3.7-flash",              ("3.7-flash",      "3.7-flash")),
     # 3.5 系（Antigravity 后端别名：低/中/高 thinking budget 的 Gemini 3.5 Flash）
     ("gemini-3.5-flash",              ("3.5-flash",      "3.5-flash")),
     ("gemini-3-flash-agent",          ("3.5-flash",      "3.5-flash-high")),
@@ -504,12 +511,13 @@ class PSQLManager:
                         return None
 
                     is_claude_model = "claude" in model_name.lower()
+                    cooldown_key = normalize_antigravity_cooldown_key(model_name)
                     for row in rows:
                         model_disabled = json.loads(row["model_disabled"] or "{}")
                         if is_claude_model and model_disabled.get("claude"):
                             continue
                         model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
-                        cd = model_cooldowns.get(model_name)
+                        cd = get_antigravity_cooldown_until(model_cooldowns, model_name)
                         if cd is None or current_time >= cd:
                             credential_data = json.loads(row["credential_data"])
                             credential_data["enable_credit"] = bool(row["enable_credit"])
@@ -1190,6 +1198,11 @@ class PSQLManager:
 
         try:
             table_name = self._get_table_name(mode)
+            cooldown_key = (
+                normalize_antigravity_cooldown_key(model_name)
+                if mode == "antigravity"
+                else model_name
+            )
             async with self._pool.acquire() as conn:
                 row = await conn.fetchrow(
                     f"SELECT model_cooldowns, cycle_stats FROM {table_name} WHERE filename = $1", filename
@@ -1202,14 +1215,22 @@ class PSQLManager:
                 model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
                 close_cycle = False
                 if cooldown_until is None:
-                    model_cooldowns.pop(model_name, None)
+                    if mode == "antigravity":
+                        model_cooldowns = clear_antigravity_cooldown_family(
+                            model_cooldowns, cooldown_key
+                        )
+                    else:
+                        model_cooldowns.pop(cooldown_key, None)
                 else:
-                    previous_until = model_cooldowns.get(model_name)
-                    model_cooldowns[model_name] = cooldown_until
+                    previous_until = get_antigravity_cooldown_until(model_cooldowns, cooldown_key)
+                    model_cooldowns[cooldown_key] = max(
+                        float(cooldown_until),
+                        float(previous_until or 0),
+                    )
                     close_cycle = not previous_until or previous_until <= time.time()
 
                 if close_cycle:
-                    new_cycle_stats, last_cycle_stats = self._close_cycle_stats(row["cycle_stats"], model_name)
+                    new_cycle_stats, last_cycle_stats = self._close_cycle_stats(row["cycle_stats"], cooldown_key)
                     await conn.execute(
                         f"""
                         UPDATE {table_name}
@@ -1232,7 +1253,7 @@ class PSQLManager:
                         json.dumps(model_cooldowns), filename
                     )
 
-            log.debug(f"Set model cooldown: {filename}, model_name={model_name}, cooldown_until={cooldown_until}")
+            log.debug(f"Set model cooldown: {filename}, model_name={cooldown_key}, cooldown_until={cooldown_until}")
             return True
 
         except Exception as e:
