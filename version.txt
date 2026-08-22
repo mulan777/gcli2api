@@ -1,4 +1,4 @@
-full_hash=463f99de94ad34359b7de029ea5ab12bc9d18022
-short_hash=463f99d
-message=Merge feat/antigravity-gemini-37: Gemini 3.7、共享额度与独立统计
-date=2026-08-16 18:07:27 +0000
+full_hash=97627ed03a0025ec8354f76d7a5201b0ba31a48b
+short_hash=97627ed
+message=fix: prevent replay after partial antigravity stream
+date=2026-08-22 07:39:29 +0000
