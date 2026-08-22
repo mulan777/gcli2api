@@ -428,6 +428,7 @@ async def _stream_request_once(
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
     next_cred_task = None  # 预热的下一个凭证任务
+    content_yielded = False  # 已向下游输出正文后，禁止异常时完整重试
 
     async def record_upstream_attempt():
         if on_upstream_start is not None:
@@ -569,6 +570,7 @@ async def _stream_request_once(
                         log.debug(f"[ANTIGRAVITY STREAM] 开始接收流式响应，模型: {model_name}")
 
                     # 记录原始chunk内容（用于调试）
+                    content_yielded = True
                     if isinstance(chunk, bytes):
                         log.debug(f"[ANTIGRAVITY STREAM RAW] chunk(bytes): {chunk}")
                     else:
@@ -623,6 +625,9 @@ async def _stream_request_once(
 
         except Exception as e:
             log.error(f"[ANTIGRAVITY STREAM] 流式请求异常: {e}, 凭证: {current_file}")
+            if content_yielded:
+                log.error("[ANTIGRAVITY STREAM] 已向下游输出正文，禁止异常后完整重试，结束当前流")
+                raise
             if attempt < max_retries:
                 log.info(f"[ANTIGRAVITY STREAM] 异常后重试 (attempt {attempt + 2}/{max_retries + 1})...")
                 await asyncio.sleep(retry_interval)
