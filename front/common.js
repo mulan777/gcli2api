@@ -142,7 +142,8 @@ function createCredsManager(type) {
                             success_count: item.success_count || 0,
                             failure_count: item.failure_count || 0,
                             cycle_stats: item.cycle_stats || {},
-                            last_cycle_stats: item.last_cycle_stats || {}
+                            last_cycle_stats: item.last_cycle_stats || {},
+                            lifetime_stats: item.lifetime_stats || {}
                         };
                     });
 
@@ -926,10 +927,22 @@ function createCredCard(credInfo, manager) {
     const lastFlash = Number(lastCycle.flash || 0);
     const lastOther = Number(lastCycle.other || 0);
     const currentCycleLine = `<div class="cred-usage-stats" style="font-size: 12px; color: #555; margin-top: 2px;" title="当前循环调用统计：从上一轮冷却结算后开始，到下一次进入冷却前累计；Claude 仅统计模型名包含 claude 的请求">当前循环：Pro ${cyclePro} / Flash ${cycleFlash} / 其他 ${cycleOther} / Claude 成功 ${cycleClaudeSuccess} / 失败 ${cycleClaudeFailure} / 总计 ${cycleTotal}</div>`;
+    const lifetime = credInfo.lifetime_stats || {};
+    const lifeTotal = Number(lifetime.total || 0);
+    const lifePro = Number(lifetime.pro || 0);
+    const lifeFlash = Number(lifetime.flash || 0);
+    const lifeOther = Number(lifetime.other || 0);
+    const lifeCycles = Number(lifetime.cycles || 0);
+    const lifeClosedPro = Number(lifetime.closed_pro || 0);
+    const lifeClosedFlash = Number(lifetime.closed_flash || 0);
+    const lifeClosedTotal = Number(lifetime.closed_total || 0);
+    const lifetimeLine = lifeTotal > 0 || lifeCycles > 0
+        ? `<div class="cred-usage-stats" style="font-size: 12px; color: #333; margin-top: 2px; font-weight: 600;" title="终身累计：跨所有5小时轮次的总计，不受冷却结算与重新导入影响；cycles=进入冷却结算的轮次数，已完结=已结算轮次的合计">累计：Pro ${lifePro} / Flash ${lifeFlash} / 其他 ${lifeOther} / 总计 ${lifeTotal} · 共 ${lifeCycles} 轮（已完结 Pro ${lifeClosedPro} / Flash ${lifeClosedFlash} / 总 ${lifeClosedTotal}）</div>`
+        : '';
     const lastCycleLine = lastTotal > 0
         ? `<div class="cred-usage-stats" style="font-size: 12px; color: #777; margin-top: 2px;" title="上一轮循环统计：进入 ${lastCycle.cooldown_family || 'unknown'} 冷却前累计">上一轮：Pro ${lastPro} / Flash ${lastFlash} / 其他 ${lastOther} / 总计 ${lastTotal}</div>`
         : '';
-    const usageStatsInfo = currentCycleLine + lastCycleLine;
+    const usageStatsInfo = lifetimeLine + currentCycleLine + lastCycleLine;
 
     const checkboxClass = manager.getElementId('file-checkbox');
 

@@ -989,6 +989,17 @@ async def normalize_antigravity_request(
                             elif isinstance(text_value, str):
                                 # 清理尾随空格
                                 part["text"] = text_value.rstrip()
+                            elif isinstance(text_value, dict):
+                                # Anthropic/OpenAI block 被误嵌套：{"text": {"type":"text","text":...}}，
+                                # 直接透传会触发上游 "messages.N.content.M.text.text: Field required"
+                                inner = text_value.get("text", "")
+                                if isinstance(inner, str) and inner.strip():
+                                    log.warning(f"[ANTIGRAVITY_FIX] text 字段是嵌套 block，自动解包")
+                                    part["text"] = inner
+                                elif inner:
+                                    part["text"] = str(inner)
+                                else:
+                                    part["text"] = ""
                             else:
                                 # 其他类型转为字符串
                                 log.warning(f"[ANTIGRAVITY_FIX] text 字段类型异常 ({type(text_value)}), 转为字符串: {text_value}")
@@ -1009,6 +1020,29 @@ async def normalize_antigravity_request(
                 cleaned_contents.append(content)
 
         result["contents"] = cleaned_contents
+
+    # systemInstruction 同样做 text 归一化：上游(Vertex Claude端)会把它转成 messages[0]，
+    # parts[].text 若是嵌套 dict 会触发 "messages.0.content.0.text.text: Field required"
+    si = result.get("systemInstruction")
+    if isinstance(si, dict):
+        si_parts = si.get("parts")
+        if isinstance(si_parts, list):
+            fixed_si_parts = []
+            for sp in si_parts:
+                if isinstance(sp, dict) and "text" in sp:
+                    tv = sp["text"]
+                    if isinstance(tv, dict):
+                        inner = tv.get("text", "")
+                        sp = dict(sp)
+                        sp["text"] = inner if isinstance(inner, str) else str(inner)
+                        log.warning(f"[ANTIGRAVITY_FIX] systemInstruction text 嵌套 block 已解包")
+                    elif not isinstance(tv, str):
+                        sp = dict(sp)
+                        sp["text"] = str(tv)
+                fixed_si_parts.append(sp)
+            si = dict(si)
+            si["parts"] = fixed_si_parts
+            result["systemInstruction"] = si
 
     if generation_config:
         result["generationConfig"] = generation_config

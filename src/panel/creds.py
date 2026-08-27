@@ -305,6 +305,7 @@ async def get_creds_status_common(
             "failure_count": summary.get("failure_count", 0),
             "cycle_stats": summary.get("cycle_stats", {}),
             "last_cycle_stats": summary.get("last_cycle_stats", {}),
+            "lifetime_stats": summary.get("lifetime_stats", {}),
             "remark": summary.get("remark", ""),
         }
 
