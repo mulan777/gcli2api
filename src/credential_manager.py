@@ -162,6 +162,7 @@ class CredentialManager:
             updates = {"disabled": disabled}
             if not disabled:
                 updates["permanent_disabled"] = False
+                updates["licensable"] = False
             success = await self.update_credential_state(
                 credential_name, updates, mode=mode
             )
@@ -174,6 +175,29 @@ class CredentialManager:
             return success
         except Exception as e:
             log.error(f"Error setting credential disabled state {credential_name}: {e}")
+            return False
+
+    async def set_cred_licensable(self, credential_name: str, licensable: bool = True, mode: str = "geminicli"):
+        """将凭证标记为「可授权」：禁用且不参与调用，需批量启用才恢复。"""
+        try:
+            log.info(
+                f"[CredMgr] set_cred_licensable 开始: credential_name={credential_name}, "
+                f"licensable={licensable}, mode={mode}"
+            )
+            updates = {
+                "licensable": bool(licensable),
+                "disabled": True if licensable else False,
+            }
+            if licensable:
+                updates["permanent_disabled"] = False
+            success = await self.update_credential_state(credential_name, updates, mode=mode)
+            if success:
+                log.info(f"Credential licensable={licensable}: {credential_name} (mode={mode})")
+            else:
+                log.warning(f"[CredMgr] 设置可授权状态失败: {credential_name}")
+            return success
+        except Exception as e:
+            log.error(f"Error setting credential licensable state {credential_name}: {e}")
             return False
 
     async def get_creds_status(self) -> Dict[str, Dict[str, Any]]:

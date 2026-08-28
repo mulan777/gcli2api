@@ -34,6 +34,7 @@ class SQLiteManager:
         "success_count",
         "failure_count",
         "remark",
+        "licensable",
     }
 
     # 所有必需的列定义（用于自动校验和修复）
@@ -41,6 +42,7 @@ class SQLiteManager:
         "credentials": [
             ("disabled", "INTEGER DEFAULT 0"),
             ("permanent_disabled", "INTEGER DEFAULT 0"),
+            ("licensable", "INTEGER DEFAULT 0"),
             ("cycle_stats", "TEXT DEFAULT '{}'"),
             ("last_cycle_stats", "TEXT DEFAULT '{}'"),
             ("error_codes", "TEXT DEFAULT '[]'"),
@@ -61,6 +63,7 @@ class SQLiteManager:
         "antigravity_credentials": [
             ("disabled", "INTEGER DEFAULT 0"),
             ("permanent_disabled", "INTEGER DEFAULT 0"),
+            ("licensable", "INTEGER DEFAULT 0"),
             ("cycle_stats", "TEXT DEFAULT '{}'"),
             ("last_cycle_stats", "TEXT DEFAULT '{}'"),
             ("error_codes", "TEXT DEFAULT '[]'"),
@@ -185,6 +188,7 @@ class SQLiteManager:
                 -- 状态字段
                 disabled INTEGER DEFAULT 0,
                 permanent_disabled INTEGER DEFAULT 0,
+                licensable INTEGER DEFAULT 0,
                 cycle_stats TEXT DEFAULT '{}',
                 last_cycle_stats TEXT DEFAULT '{}',
                 error_codes TEXT DEFAULT '[]',
@@ -224,6 +228,7 @@ class SQLiteManager:
                 -- 状态字段
                 disabled INTEGER DEFAULT 0,
                 permanent_disabled INTEGER DEFAULT 0,
+                licensable INTEGER DEFAULT 0,
                 cycle_stats TEXT DEFAULT '{}',
                 last_cycle_stats TEXT DEFAULT '{}',
                 error_codes TEXT DEFAULT '[]',
@@ -1017,15 +1022,17 @@ class SQLiteManager:
 
             async with aiosqlite.connect(self._db_path) as db:
                 # 先计算全局统计数据（不受筛选条件影响）
-                global_stats = {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0}
+                global_stats = {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0, "licensable": 0}
                 async with db.execute(f"""
-                    SELECT disabled, permanent_disabled, COUNT(*) FROM {table_name} GROUP BY disabled, permanent_disabled
+                    SELECT disabled, permanent_disabled, COALESCE(licensable, 0), COUNT(*) FROM {table_name} GROUP BY disabled, permanent_disabled, COALESCE(licensable, 0)
                 """) as stats_cursor:
                     stats_rows = await stats_cursor.fetchall()
-                    for disabled, permanent_disabled, count in stats_rows:
+                    for disabled, permanent_disabled, licensable, count in stats_rows:
                         global_stats["total"] += count
                         if permanent_disabled:
                             global_stats["permanent_disabled"] += count
+                        elif disabled and licensable:
+                            global_stats["licensable"] += count
                         elif disabled:
                             global_stats["disabled"] += count
                         else:
@@ -1038,9 +1045,11 @@ class SQLiteManager:
                 if status_filter == "enabled":
                     where_clauses.append("disabled = 0 AND COALESCE(permanent_disabled, 0) = 0")
                 elif status_filter == "disabled":
-                    where_clauses.append("disabled = 1 AND COALESCE(permanent_disabled, 0) = 0")
+                    where_clauses.append("disabled = 1 AND COALESCE(permanent_disabled, 0) = 0 AND COALESCE(licensable, 0) = 0")
                 elif status_filter == "permanent_disabled":
                     where_clauses.append("COALESCE(permanent_disabled, 0) = 1")
+                elif status_filter == "licensable":
+                    where_clauses.append("disabled = 1 AND COALESCE(permanent_disabled, 0) = 0 AND COALESCE(licensable, 0) = 1")
 
                 filter_value = None
                 filter_int = None
@@ -1065,7 +1074,8 @@ class SQLiteManager:
                     all_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               COALESCE(licensable, 0)
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -1074,7 +1084,8 @@ class SQLiteManager:
                     all_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, model_disabled, tier, enable_credit,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               COALESCE(licensable, 0)
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -1131,6 +1142,7 @@ class SQLiteManager:
                             summary = {
                                 "filename": filename,
                                 "disabled": bool(row[1]),
+                                "licensable": bool(row[-1]) if len(row) > 15 else False,
                                 "permanent_disabled": bool(row[11]) if len(row) > 11 else False,
                                 "error_codes": error_codes,
                                 "last_success": row[3] or current_time,
@@ -1150,6 +1162,7 @@ class SQLiteManager:
                             summary = {
                                 "filename": filename,
                                 "disabled": bool(row[1]),
+                                "licensable": bool(row[-1]) if len(row) > 16 else False,
                                 "permanent_disabled": bool(row[12]) if len(row) > 12 else False,
                                 "error_codes": error_codes,
                                 "last_success": row[3] or current_time,

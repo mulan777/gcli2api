@@ -34,6 +34,7 @@ from src.utils import (
     CLIENT_SECRET as UTILS_GEMINI_CLIENT_SECRET,
 )
 from src.api.antigravity import fetch_quota_info
+from src.api.utils import is_license_error, apply_probe_error_classification
 from src.api.utils import check_should_auto_ban
 from src.google_oauth_api import Credentials, fetch_project_id_and_tier, get_user_projects, select_default_project, enable_required_apis, ensure_geminicli_project, validate_geminicli_project
 from src.httpx_client import post_async
@@ -257,8 +258,8 @@ async def get_creds_status_common(
         raise HTTPException(status_code=400, detail="offset 必须大于等于 0")
     if limit not in [20, 50, 100, 200, 500, 1000]:
         raise HTTPException(status_code=400, detail="limit 只能是 20、50、100、200、500 或 1000")
-    if status_filter not in ["all", "enabled", "disabled", "permanent_disabled"]:
-        raise HTTPException(status_code=400, detail="status_filter 只能是 all、enabled、disabled 或 permanent_disabled")
+    if status_filter not in ["all", "enabled", "disabled", "permanent_disabled", "licensable"]:
+        raise HTTPException(status_code=400, detail="status_filter 只能是 all、enabled、disabled、permanent_disabled 或 licensable")
     if cooldown_filter and cooldown_filter not in ["all", "in_cooldown", "no_cooldown", "pro_no_cooldown", "flash_no_cooldown", "claude_no_cooldown"]:
         raise HTTPException(status_code=400, detail="cooldown_filter 只能是 all、in_cooldown、no_cooldown、pro_no_cooldown、flash_no_cooldown 或 claude_no_cooldown")
     if preview_filter and preview_filter not in ["all", "preview", "no_preview"]:
@@ -291,6 +292,7 @@ async def get_creds_status_common(
             "filename": os.path.basename(summary["filename"]),
             "user_email": summary["user_email"],
             "disabled": summary["disabled"],
+            "licensable": summary.get("licensable", False),
             "error_codes": summary["error_codes"],
             "last_success": summary["last_success"],
             "backend_type": backend_type,
@@ -317,7 +319,7 @@ async def get_creds_status_common(
         "offset": offset,
         "limit": limit,
         "has_more": (offset + limit) < result["total"],
-        "stats": result.get("stats", {"total": 0, "normal": 0, "disabled": 0}),
+        "stats": result.get("stats", {"total": 0, "normal": 0, "disabled": 0, "licensable": 0}),
     })
 
 
@@ -1467,10 +1469,16 @@ async def batch_refresh_cooldown(
                 try:
                     quota = await _fetch_quota_for_credential(filename, mode=mode)
                     if not quota.get("success"):
+                        q_err = quota.get("error", "获取额度失败")
+                        try:
+                            await apply_probe_error_classification(filename, q_err, mode=mode)
+                        except Exception as cls_err:
+                            log.error(f"批量查额度错误分类失败 {filename}: {cls_err}")
                         return {
                             "filename": filename,
                             "success": False,
-                            "error": quota.get("error", "获取额度失败"),
+                            "error": q_err,
+                            "licensable": is_license_error(q_err),
                         }
                     models = quota.get("models", {}) or {}
 
@@ -2030,20 +2038,26 @@ async def test_credential_common(filename: str, mode: str = "geminicli") -> JSON
 
                 log.info(f"已保存测试错误信息: {filename} - 错误码 {status_code}")
 
-                # 测试失败也触发自动封禁（与真实业务调用对齐）：
-                # auto_ban_enabled=True 且 status_code 在 auto_ban_error_codes 列表内时
-                # 直接禁用该凭证，避免轮询命中已知会失败的凭证
+                # 测试失败分流：license 报错 → 「可授权」（禁用不参与调用，可批量启用恢复）；
+                # 其他错误（含 429 quota exhausted）只打错误码；auto_ban 名单内的再走自动封禁
                 try:
-                    if await check_should_auto_ban(status_code):
+                    if is_license_error(error_text):
                         log.warning(
-                            f"[BATCH-TEST AUTO_BAN] Status {status_code} triggers auto-ban "
-                            f"for credential: {filename} (mode={mode})"
+                            f"[BATCH-TEST LICENSABLE] license error on {filename} "
+                            f"(mode={mode}, status={status_code}) -> 可授权"
                         )
-                        await credential_manager.set_cred_disabled(
-                            filename, True, mode=mode
-                        )
+                        await credential_manager.set_cred_licensable(filename, True, mode=mode)
+                    else:
+                        if await check_should_auto_ban(status_code):
+                            log.warning(
+                                f"[BATCH-TEST AUTO_BAN] Status {status_code} triggers auto-ban "
+                                f"for credential: {filename} (mode={mode})"
+                            )
+                            await credential_manager.set_cred_disabled(
+                                filename, True, mode=mode
+                            )
                 except Exception as ban_err:
-                    log.error(f"测试失败自动封禁触发异常 {filename}: {ban_err}")
+                    log.error(f"测试失败分类/封禁处理异常 {filename}: {ban_err}")
             except Exception as e:
                 log.error(f"保存测试错误信息失败: {e}")
 
@@ -2227,12 +2241,14 @@ async def batch_test_credentials(
                     response = await test_credential_common(filename, mode=mode)
                     body = json.loads(response.body.decode("utf-8"))
                     ok = response.status_code == 200 and body.get("success", False)
+                    err = body.get("error")
                     return {
                         "filename": filename,
                         "success": ok,
                         "status_code": body.get("status_code", response.status_code),
                         "message": body.get("message") or ("测试成功" if ok else "测试失败"),
-                        "error": body.get("error"),
+                        "error": err,
+                        "licensable": bool(not ok and is_license_error(err)),
                     }
                 except HTTPException as e:
                     return {

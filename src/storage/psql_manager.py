@@ -99,6 +99,7 @@ class PSQLManager:
         "success_count",
         "failure_count",
         "remark",
+        "licensable",
     }
 
     def __init__(self):
@@ -153,6 +154,7 @@ class PSQLManager:
 
                 disabled INTEGER DEFAULT 0,
                 permanent_disabled INTEGER DEFAULT 0,
+                licensable INTEGER DEFAULT 0,
                 cycle_stats TEXT DEFAULT '{}',
                 last_cycle_stats TEXT DEFAULT '{}',
                 error_codes TEXT DEFAULT '[]',
@@ -183,6 +185,7 @@ class PSQLManager:
 
                 disabled INTEGER DEFAULT 0,
                 permanent_disabled INTEGER DEFAULT 0,
+                licensable INTEGER DEFAULT 0,
                 cycle_stats TEXT DEFAULT '{}',
                 last_cycle_stats TEXT DEFAULT '{}',
                 error_codes TEXT DEFAULT '[]',
@@ -304,6 +307,7 @@ class PSQLManager:
                 ("success_count", "INTEGER DEFAULT 0"),
                 ("failure_count", "INTEGER DEFAULT 0"),
                 ("permanent_disabled", "INTEGER DEFAULT 0"),
+                ("licensable", "INTEGER DEFAULT 0"),
                 ("cycle_stats", "TEXT DEFAULT '{}'"),
                 ("last_cycle_stats", "TEXT DEFAULT '{}'"),
                 ("remark", "TEXT DEFAULT ''"),
@@ -325,6 +329,7 @@ class PSQLManager:
                 ("success_count", "INTEGER DEFAULT 0"),
                 ("failure_count", "INTEGER DEFAULT 0"),
                 ("permanent_disabled", "INTEGER DEFAULT 0"),
+                ("licensable", "INTEGER DEFAULT 0"),
                 ("cycle_stats", "TEXT DEFAULT '{}'"),
                 ("last_cycle_stats", "TEXT DEFAULT '{}'"),
                 ("remark", "TEXT DEFAULT ''"),
@@ -880,13 +885,15 @@ class PSQLManager:
             async with self._pool.acquire() as conn:
                 # 全局统计
                 stats_rows = await conn.fetch(
-                    f"SELECT disabled, permanent_disabled, COUNT(*) AS cnt FROM {table_name} GROUP BY disabled, permanent_disabled"
+                    f"SELECT disabled, permanent_disabled, COALESCE(licensable, 0) AS licensable, COUNT(*) AS cnt FROM {table_name} GROUP BY disabled, permanent_disabled, COALESCE(licensable, 0)"
                 )
-                global_stats = {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0}
+                global_stats = {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0, "licensable": 0}
                 for r in stats_rows:
                     global_stats["total"] += r["cnt"]
                     if r["permanent_disabled"]:
                         global_stats["permanent_disabled"] += r["cnt"]
+                    elif r["disabled"] and r.get("licensable"):
+                        global_stats["licensable"] += r["cnt"]
                     elif r["disabled"]:
                         global_stats["disabled"] += r["cnt"]
                     else:
@@ -897,16 +904,18 @@ class PSQLManager:
                 if status_filter == "enabled":
                     where_clauses.append("disabled = 0 AND COALESCE(permanent_disabled, 0) = 0")
                 elif status_filter == "disabled":
-                    where_clauses.append("disabled = 1 AND COALESCE(permanent_disabled, 0) = 0")
+                    where_clauses.append("disabled = 1 AND COALESCE(permanent_disabled, 0) = 0 AND COALESCE(licensable, 0) = 0")
                 elif status_filter == "permanent_disabled":
                     where_clauses.append("COALESCE(permanent_disabled, 0) = 1")
+                elif status_filter == "licensable":
+                    where_clauses.append("disabled = 1 AND COALESCE(permanent_disabled, 0) = 0 AND COALESCE(licensable, 0) = 1")
 
                 where_clause = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
                 # 查询
                 if mode == "geminicli":
                     all_rows = await conn.fetch(f"""
-                        SELECT filename, disabled, error_codes, last_success,
+                        SELECT filename, disabled, COALESCE(licensable, 0) AS licensable, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, preview, tier,
                                success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
@@ -915,7 +924,7 @@ class PSQLManager:
                     """)
                 else:
                     all_rows = await conn.fetch(f"""
-                        SELECT filename, disabled, error_codes, last_success,
+                        SELECT filename, disabled, COALESCE(licensable, 0) AS licensable, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, model_disabled, tier, enable_credit,
                                success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
@@ -972,6 +981,7 @@ class PSQLManager:
                     summary = {
                         "filename": row["filename"],
                         "disabled": bool(row["disabled"]),
+                        "licensable": bool(row["licensable"]) if row["licensable"] is not None else False,
                         "permanent_disabled": bool(row["permanent_disabled"]),
                         "error_codes": error_codes,
                         "last_success": row["last_success"] or current_time,
