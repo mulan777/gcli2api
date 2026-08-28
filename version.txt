@@ -1,4 +1,4 @@
-full_hash=97627ed03a0025ec8354f76d7a5201b0ba31a48b
-short_hash=97627ed
-message=fix: prevent replay after partial antigravity stream
-date=2026-08-22 07:39:29 +0000
+full_hash=pending-v1.9.3
+short_hash=pending
+message=Merge upstream master and licensable credential classification
+date=2026-08-28 +0800
