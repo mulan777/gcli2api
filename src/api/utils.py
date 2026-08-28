@@ -5,6 +5,7 @@ Base API Client - 共用的 API 客户端基础功能
 
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -22,6 +23,45 @@ from src.credential_manager import CredentialManager
 
 
 # ==================== 错误检查与处理 ====================
+
+LICENSE_ERROR_MARKERS = (
+    "you do not have a valid license of this product",
+    "please contact your administrator to request a license",
+    "subscription_required",
+    "request-license",
+)
+
+
+def is_license_error(error_text: str | None) -> bool:
+    """判断是否为 Gemini Code Assist 未授权/缺 license 错误。"""
+    text = (error_text or "").lower()
+    if not text:
+        return False
+    return any(marker in text for marker in LICENSE_ERROR_MARKERS)
+
+
+def extract_status_code_from_error(error_text: str | None, fallback: int | None = None) -> int | None:
+    """从额度/测试错误文本里提取 HTTP 状态码。"""
+    import re
+
+    text = error_text or ""
+    if not text:
+        return fallback
+    patterns = (
+        r"HTTP\s+(\d{3})",
+        r"API返回错误:\s*(\d{3})",
+        r"'code':\s*(\d{3})",
+        r'"code":\s*(\d{3})',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            try:
+                return int(match.group(1))
+            except (TypeError, ValueError):
+                continue
+    return fallback
+
 
 async def check_should_auto_ban(status_code: int) -> bool:
     """
@@ -43,24 +83,61 @@ async def handle_auto_ban(
     credential_manager: CredentialManager,
     status_code: int,
     credential_name: str,
-    mode: str = "geminicli"
+    mode: str = "geminicli",
+    error_message: Optional[str] = None,
 ) -> None:
     """
-    处理自动封禁：直接禁用凭证
-    
-    Args:
-        credential_manager: 凭证管理器实例
-        status_code: HTTP状态码
-        credential_name: 凭证名称
-        mode: 模式（geminicli 或 antigravity）
+    处理自动封禁：直接禁用凭证。
+    license / 未授权错误进入「可授权」分类，不走普通禁用。
     """
-    if credential_manager and credential_name:
+    if not credential_manager or not credential_name:
+        return
+    if is_license_error(error_message):
         log.warning(
-            f"[{mode.upper()} AUTO_BAN] Status {status_code} triggers auto-ban for credential: {credential_name}"
+            f"[{mode.upper()} LICENSABLE] Status {status_code} marks credential as licensable: {credential_name}"
         )
-        await credential_manager.set_cred_disabled(
-            credential_name, True, mode=mode
+        await credential_manager.set_cred_licensable(credential_name, True, mode=mode)
+        return
+    log.warning(
+        f"[{mode.upper()} AUTO_BAN] Status {status_code} triggers auto-ban for credential: {credential_name}"
+    )
+    await credential_manager.set_cred_disabled(
+        credential_name, True, mode=mode
+    )
+
+
+async def apply_probe_error_classification(
+    filename: str,
+    error_text: str,
+    status_code: Optional[int] = None,
+    mode: str = "geminicli",
+    model_name: Optional[str] = None,
+    record: bool = True,
+) -> str:
+    """批量测试 / 查看额度失败后的分类。
+
+    Returns:
+        "licensable" | "error_code"
+    """
+    code = extract_status_code_from_error(error_text, fallback=status_code)
+    if code is None:
+        code = 0
+    if record and hasattr(credential_manager, "record_api_call_result"):
+        await credential_manager.record_api_call_result(
+            filename,
+            False,
+            code or None,
+            mode=mode,
+            model_name=model_name,
+            error_message=error_text,
         )
+    if is_license_error(error_text):
+        log.warning(
+            f"[PROBE LICENSABLE] {filename} (mode={mode}, status={code}) marked licensable"
+        )
+        await credential_manager.set_cred_licensable(filename, True, mode=mode)
+        return "licensable"
+    return "error_code"
 
 
 async def handle_error_with_retry(
@@ -71,7 +148,8 @@ async def handle_error_with_retry(
     attempt: int,
     max_retries: int,
     retry_interval: float,
-    mode: str = "geminicli"
+    mode: str = "geminicli",
+    error_message: Optional[str] = None,
 ) -> bool:
     """
     统一处理错误和重试逻辑
@@ -95,12 +173,28 @@ async def handle_error_with_retry(
     Returns:
         bool: True表示需要继续重试，False表示不需要重试
     """
+    # license 未授权：进入可授权（禁用且不参与调用），再尝试换号重试
+    if is_license_error(error_message):
+        await handle_auto_ban(
+            credential_manager, status_code, credential_name, mode, error_message=error_message
+        )
+        if retry_enabled and attempt < max_retries:
+            log.info(
+                f"[{mode.upper()} RETRY] Retrying with next credential after licensable "
+                f"(status {status_code}, attempt {attempt + 1}/{max_retries})"
+            )
+            await asyncio.sleep(retry_interval)
+            return True
+        return False
+
     # 优先检查自动封禁
     should_auto_ban = await check_should_auto_ban(status_code)
 
     if should_auto_ban:
         # 触发自动封禁
-        await handle_auto_ban(credential_manager, status_code, credential_name, mode)
+        await handle_auto_ban(
+            credential_manager, status_code, credential_name, mode, error_message=error_message
+        )
 
         # 自动封禁后，仍然尝试重试（会在下次循环中自动获取新凭证）
         if retry_enabled and attempt < max_retries:

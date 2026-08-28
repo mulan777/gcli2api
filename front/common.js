@@ -60,7 +60,7 @@ function createCredsManager(type) {
         currentPreviewFilter: 'all',
         currentTierFilter: 'all',
         currentRemarkFilter: '__all__',
-        statsData: { total: 0, normal: 0, disabled: 0, permanent_disabled: 0 },
+        statsData: { total: 0, normal: 0, disabled: 0, permanent_disabled: 0, licensable: 0 },
 
         // API端点
         getEndpoint: (action) => {
@@ -125,6 +125,7 @@ function createCredsManager(type) {
                             filename: item.filename,
                             status: {
                                 disabled: item.disabled,
+                                licensable: item.licensable || false,
                                 permanent_disabled: item.permanent_disabled || false,
                                 error_codes: item.error_codes || [],
                                 last_success: item.last_success,
@@ -158,7 +159,7 @@ function createCredsManager(type) {
 
                     let msg = `已加载 ${data.total} 个${type === 'antigravity' ? 'Antigravity' : ''}凭证文件`;
                     if (this.currentStatusFilter !== 'all') {
-                        msg += ` (筛选: ${this.currentStatusFilter === 'enabled' ? '仅启用' : (this.currentStatusFilter === 'permanent_disabled' ? '永久禁用' : '仅禁用')})`;
+                        msg += ` (筛选: ${this.currentStatusFilter === 'enabled' ? '仅启用' : (this.currentStatusFilter === 'permanent_disabled' ? '永久禁用' : (this.currentStatusFilter === 'licensable' ? '可授权' : '仅禁用'))})`;
                     }
                     showStatus(msg, 'success');
                 } else {
@@ -173,10 +174,12 @@ function createCredsManager(type) {
 
         // 计算统计数据（仅用于兼容旧版本后端）
         calculateStats() {
-            this.statsData = { total: this.totalCount, normal: 0, disabled: 0, permanent_disabled: 0 };
+            this.statsData = { total: this.totalCount, normal: 0, disabled: 0, permanent_disabled: 0, licensable: 0 };
             Object.values(this.data).forEach(credInfo => {
                 if (credInfo.status.permanent_disabled) {
                     this.statsData.permanent_disabled++;
+                } else if (credInfo.status.disabled && credInfo.status.licensable) {
+                    this.statsData.licensable++;
                 } else if (credInfo.status.disabled) {
                     this.statsData.disabled++;
                 } else {
@@ -192,6 +195,8 @@ function createCredsManager(type) {
             document.getElementById(this.getElementId('StatDisabled')).textContent = this.statsData.disabled;
             const permanentEl = document.getElementById(this.getElementId('StatPermanentDisabled'));
             if (permanentEl) permanentEl.textContent = this.statsData.permanent_disabled || 0;
+            const licensableEl = document.getElementById(this.getElementId('StatLicensable'));
+            if (licensableEl) licensableEl.textContent = this.statsData.licensable || 0;
         },
 
         // 渲染凭证列表
@@ -659,13 +664,19 @@ function createCredCard(credInfo, manager) {
 
     // 卡片样式
     div.className = (status.disabled || status.permanent_disabled) ? 'cred-card disabled' : 'cred-card';
+    const isLicensable = !status.permanent_disabled && status.disabled && status.licensable;
 
     // 状态徽章
     let statusBadges = '';
+    if (isLicensable) {
+        statusBadges += '<span class="status-badge" style="background-color: #8e24aa; color: white;" title="license 未授权：不参与调用，批量启用后可恢复">可授权</span>';
+    }
     statusBadges += status.permanent_disabled
         ? '<span class="status-badge disabled">永久禁用</span>'
         : (status.disabled
-            ? '<span class="status-badge disabled">已禁用</span>'
+            ? (isLicensable
+                ? ''
+                : '<span class="status-badge disabled">已禁用</span>')
             : '<span class="status-badge enabled">已启用</span>');
 
     if (status.error_codes && status.error_codes.length > 0) {
