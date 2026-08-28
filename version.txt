@@ -1,4 +1,4 @@
-full_hash=7c046076999dd3e884bcbe5e9fb293b68b15bda8
-short_hash=7c04607
-message=Merge release-v1.9.3: upstream sync and licensable credentials
+full_hash=a3f00366a38442a09d85f733f92a17dc1e0cf4df
+short_hash=a3f0036
+message=chore: prepare v1.9.3 release metadata
 date=2026-08-28 00:17:29 +0000
