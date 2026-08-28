@@ -1,4 +1,4 @@
-full_hash=pending-v1.9.3
-short_hash=pending
-message=Merge upstream master and licensable credential classification
-date=2026-08-28 +0800
+full_hash=7c046076999dd3e884bcbe5e9fb293b68b15bda8
+short_hash=7c04607
+message=Merge release-v1.9.3: upstream sync and licensable credentials
+date=2026-08-28 00:17:29 +0000
