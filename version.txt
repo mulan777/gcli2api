@@ -1,4 +1,4 @@
-full_hash=506976729b4de2e9169f9b5dea20b89dc94a6641
-short_hash=5069767
-message=Merge fix/mobile-licensable-v195: mobile licensable filter
-date=2026-09-03 12:49:22 +0000
+full_hash=e0303fb79f7caf845cf6e2829da8cb8fc34c07c6
+short_hash=e0303fb
+message=Merge fix/mobile-licensable-stats-v196: mobile licensable stats
+date=2026-09-03 13:03:34 +0000
