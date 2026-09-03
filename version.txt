@@ -1,4 +1,4 @@
-full_hash=93d95a2dd012185c29c0f4ee2b5f1cc982aa6376
-short_hash=93d95a2
-message=Merge feat/anti-opus-text-upstream-20260903: Claude text normalize + Gemini 3.8 + Anti CLI 1.1.24
+full_hash=dbbd1d66d463fea2a2cc6eecb50a516b570e3571
+short_hash=dbbd1d6
+message=chore: prepare v1.9.4 release metadata
 date=2026-09-03 09:41:35 +0000
