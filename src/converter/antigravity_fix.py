@@ -290,6 +290,59 @@ def _normalize_tools_for_internal_api(tools: Any) -> Any:
     return normalized_tools
 
 
+def _normalize_claude_text_value(value: Any) -> str:
+    """将 Claude 文本 part 中的嵌套文本安全地归一化为字符串。"""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            text = _normalize_claude_text_value(item)
+            if text:
+                parts.append(text)
+        return " ".join(parts)
+    if isinstance(value, dict):
+        if "text" in value:
+            return _normalize_claude_text_value(value.get("text"))
+        return ""
+    return str(value)
+
+
+def _normalize_claude_text_parts(contents: Any) -> Any:
+    """只修 Claude/Opus 的 text 字段，不改工具或其他 part。"""
+    if not isinstance(contents, list):
+        return contents
+
+    normalized_contents = []
+    for content in contents:
+        if not isinstance(content, dict) or not isinstance(content.get("parts"), list):
+            normalized_contents.append(content)
+            continue
+
+        normalized_parts = []
+        for part in content["parts"]:
+            if not isinstance(part, dict) or "text" not in part:
+                normalized_parts.append(part)
+                continue
+
+            normalized_text = _normalize_claude_text_value(part.get("text"))
+            if not normalized_text.strip():
+                log.warning("[ANTIGRAVITY_FIX] 移除空 Claude 文本 part")
+                continue
+
+            normalized_part = part.copy()
+            normalized_part["text"] = normalized_text.rstrip()
+            normalized_parts.append(normalized_part)
+
+        normalized_content = content.copy()
+        normalized_content["parts"] = normalized_parts
+        normalized_contents.append(normalized_content)
+
+    return normalized_contents
+
+
 def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str, mode: str = "antigravity") -> Any:
     if not isinstance(tools, list):
         return tools
@@ -826,6 +879,7 @@ async def normalize_antigravity_request(
         "sonnet",
         "gemini-3.6-flash",
         "gemini-3.7-flash",
+        "gemini-3.8-flash",
     ]
     if any(keyword in model.lower() for keyword in no_prefill_models):
         contents = result.get("contents", [])
@@ -864,6 +918,8 @@ async def normalize_antigravity_request(
         generation_config["topK"] = 64
 
     if "contents" in result:
+        if "claude" in model.lower():
+            result["contents"] = _normalize_claude_text_parts(result["contents"])
         result["contents"] = _ensure_tool_call_ids(result["contents"], model)
 
         cleaned_contents = []
