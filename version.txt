@@ -1,4 +1,4 @@
-full_hash=e0303fb79f7caf845cf6e2829da8cb8fc34c07c6
-short_hash=e0303fb
-message=Merge fix/mobile-licensable-stats-v196: mobile licensable stats
-date=2026-09-03 13:03:34 +0000
+full_hash=6d8aa6a8d732fdd462315357ecb3a4620fa5d1bd
+short_hash=6d8aa6a
+message=fix(stream): assign globally unique tool-call index across streaming chunks
+date=2026-09-08 07:39:27 +0000
