@@ -1048,7 +1048,9 @@ def _reverse_transform_args(args: Any) -> Any:
 
 
 def extract_tool_calls_from_parts(
-    parts: List[Dict[str, Any]], is_streaming: bool = False
+    parts: List[Dict[str, Any]],
+    is_streaming: bool = False,
+    index_state: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
     从 Gemini response parts 中提取工具调用和文本内容
@@ -1056,6 +1058,11 @@ def extract_tool_calls_from_parts(
     Args:
         parts: Gemini response 的 parts 数组
         is_streaming: 是否为流式响应（流式响应需要添加 index 字段）
+        index_state: 流式跨 chunk 的 index 分配状态 {"by_id": {}, "next": 0}。
+            并行工具调用会被 Google 拆到多个 chunk，每个 chunk 内 part 序号
+            恒为 0；若不按「函数调用 id -> 全局唯一 index」分配，客户端会把
+            不同工具调用的 arguments 拼到一起，导致 JSON 解析失败
+            (Provider returned an incomplete or malformed tool call)。
 
     Returns:
         (tool_calls, text_content) 元组
@@ -1084,7 +1091,15 @@ def extract_tool_calls_from_parts(
             }
             # 流式响应需要 index 字段
             if is_streaming:
-                tool_call["index"] = idx
+                if index_state is not None:
+                    # 同一工具调用 id 沿用已分配的 index，新 id 分配下一个全局 index
+                    if original_id not in index_state["by_id"]:
+                        index_state["by_id"][original_id] = index_state["next"]
+                        index_state["next"] += 1
+                    tool_call["index"] = index_state["by_id"][original_id]
+                else:
+                    # 无状态（单 chunk 场景）退化为 chunk 内 part 序号，保持向后兼容
+                    tool_call["index"] = idx
             tool_calls.append(tool_call)
 
         # 提取文本内容（排除 thinking tokens）
@@ -1648,7 +1663,8 @@ def convert_gemini_to_openai_stream(
     gemini_stream_chunk: str,
     model: str,
     response_id: str,
-    status_code: int = 200
+    status_code: int = 200,
+    tool_index_state: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
     """
     将 Gemini 格式流式响应块转换为 OpenAI SSE 格式流式响应
@@ -1660,6 +1676,9 @@ def convert_gemini_to_openai_stream(
         model: 模型名称
         response_id: 此流式响应的一致ID
         status_code: HTTP 状态码 (默认 200)
+        tool_index_state: 跨 chunk 的工具调用 index 分配状态 {"by_id": {}, "next": 0}。
+            并行工具调用跨 chunk 下发，必须按 id 全局递增分配，否则多个工具调用
+            的 index 都是 0，客户端拼接 arguments 会产生非法 JSON。
 
     Returns:
         OpenAI SSE 格式的响应字符串 (如 "data: {json}\n\n"),
@@ -1714,7 +1733,9 @@ def convert_gemini_to_openai_stream(
         parts = candidate.get("content", {}).get("parts", [])
 
         # 提取工具调用和文本内容 (流式需要 index)
-        tool_calls, text_content = extract_tool_calls_from_parts(parts, is_streaming=True)
+        tool_calls, text_content = extract_tool_calls_from_parts(
+            parts, is_streaming=True, index_state=tool_index_state
+        )
 
         # 提取多种类型的内容
         content_parts = []
