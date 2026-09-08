@@ -228,6 +228,11 @@ async def chat_completions(
 
         max_attempts = await get_anti_truncation_max_attempts()
 
+        # 跨 chunk 的工具调用 index 分配器：并行工具调用跨 chunk 下发时，
+        # 必须按 functionCall id 全局递增分配 index，否则客户端会把多个
+        # 工具调用的 arguments 拼成一段非法 JSON（malformed tool call）
+        tool_index_state = {"by_id": {}, "next": 0}
+
         # 首先对payload应用反截断指令
         anti_truncation_payload = apply_anti_truncation(api_request)
 
@@ -291,7 +296,8 @@ async def chat_completions(
                     openai_chunk_str = convert_gemini_to_openai_stream(
                         chunk_str,
                         real_model,
-                        response_id
+                        response_id,
+                        tool_index_state=tool_index_state
                     )
 
                     if openai_chunk_str:
@@ -309,6 +315,9 @@ async def chat_completions(
         from src.api.geminicli import stream_request
         from fastapi import Response
         import uuid
+
+        # 跨 chunk 的工具调用 index 分配器（并行工具调用必须全局唯一 index）
+        tool_index_state = {"by_id": {}, "next": 0}
 
         # 调用 API 层的流式请求（不使用 native 模式）
         stream_gen = stream_request(body=api_request, native=False)
@@ -364,7 +373,8 @@ async def chat_completions(
                         openai_chunk_str = convert_gemini_to_openai_stream(
                             chunk_str,
                             real_model,
-                            response_id
+                            response_id,
+                            tool_index_state=tool_index_state
                         )
 
                         if openai_chunk_str:
