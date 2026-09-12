@@ -2532,6 +2532,12 @@ async def _add_credential_by_refresh_token(
     # 4. 入库
     if mode == "antigravity":
         await credential_manager.add_antigravity_credential(filename, credential_data)
+        # 导入时检测到的订阅等级直接落库（与 verify 路径对齐），
+        # 否则表列默认值 'pro' 会掩盖 free 卡，面板显示全部 pro。
+        if subscription_tier:
+            await credential_manager.update_credential_state(
+                filename, {"tier": subscription_tier}, mode="antigravity"
+            )
     else:
         await credential_manager.add_credential(filename, credential_data)
 
@@ -2620,7 +2626,7 @@ async def _retry_project_id_in_background(filename: str, mode: str, max_attempts
                 log.info(f"后台补探测跳过：{filename} 已有 project_id")
                 return
 
-            pid, _tier = await _detect_project_id_once(current, mode)
+            pid, backfill_tier = await _detect_project_id_once(current, mode)
             if not pid:
                 log.info(f"后台补探测 project_id 第 {attempt}/{max_attempts} 次未成功: {filename}")
                 continue
@@ -2631,8 +2637,12 @@ async def _retry_project_id_in_background(filename: str, mode: str, max_attempts
                 return
             latest["project_id"] = pid
             await storage.store_credential(filename, latest, mode=mode)
+            state_updates: Dict[str, Any] = {"disabled": False}
+            # 与主导入路径对齐：anti 模式下补探测到的订阅等级一并落库
+            if mode == "antigravity" and backfill_tier:
+                state_updates["tier"] = backfill_tier
             await storage.update_credential_state(
-                filename, {"disabled": False}, mode=mode
+                filename, state_updates, mode=mode
             )
             log.info(f"后台补探测 project_id 成功: {filename} -> {pid} (第 {attempt}/{max_attempts} 次)")
             return
