@@ -681,6 +681,33 @@ def clear_antigravity_cooldown_family(cooldowns: dict, model_name: str) -> dict:
     }
 
 
+def cooldowns_affect_family(active_cooldowns: dict, family: str) -> bool:
+    """判断 active_cooldowns（已过滤过期）中是否有锁影响指定模型族。
+
+    与调度侧 normalize_antigravity_cooldown_key / get_antigravity_cooldown_until
+    语义保持一致，避免面板「X系列未冷却」分组只看键名字面量导致共享族锁漏判：
+    - gemini-shared 键同时锁 Pro 与 Flash（gemini-3.1-pro*、gemini-3.5/3.6/3.7-flash*）
+    - claude-gpt-shared 键同时锁 Claude 与 gpt-oss 系列
+    - gemini-3.8-flash-* 等独立键按字面归 Flash
+    """
+    if not isinstance(active_cooldowns, dict):
+        return False
+    family = str(family or "").lower()
+    for key in active_cooldowns:
+        lowered = str(key).lower()
+        norm = normalize_antigravity_cooldown_key(lowered)
+        if family == "pro":
+            if norm == "gemini-shared" or "pro" in lowered:
+                return True
+        elif family == "flash":
+            if norm == "gemini-shared" or "flash" in lowered:
+                return True
+        elif family == "claude":
+            if norm == "claude-gpt-shared" or lowered.startswith("claude-") or lowered.startswith("gpt-oss-"):
+                return True
+    return False
+
+
 def get_antigravity_cooldown_until(cooldowns: dict, model_name: str):
     """读取共享键与旧具体键，兼容历史 CD 状态并返回最晚截止时间。"""
     if not isinstance(cooldowns, dict):
