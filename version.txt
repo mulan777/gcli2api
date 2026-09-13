@@ -1,4 +1,4 @@
-full_hash=6d8aa6a8d732fdd462315357ecb3a4620fa5d1bd
-short_hash=6d8aa6a
-message=fix(stream): assign globally unique tool-call index across streaming chunks
-date=2026-09-08 07:39:27 +0000
+full_hash=0564cea19dd31af7a50780e463f4eea05ba40d20
+short_hash=0564cea
+message=Merge fix/stream-tool-call-index: anti tier persist + cooldown family grouping
+date=2026-09-13 01:35:32 +0000
