@@ -14,6 +14,7 @@ import asyncpg
 from log import log
 from src.converter.antigravity_fix import (
     clear_antigravity_cooldown_family,
+    cooldowns_affect_family,
     get_antigravity_cooldown_until,
     normalize_antigravity_cooldown_key,
 )
@@ -1021,15 +1022,15 @@ class PSQLManager:
                             all_summaries.append(summary)
                     elif cooldown_filter == "pro_no_cooldown":
                         # 只保留 Pro 系列未冷却的凭证（不管 Flash 是否冷却）
-                        if not any("pro" in k.lower() for k in active_cooldowns):
+                        if not cooldowns_affect_family(active_cooldowns, "pro"):
                             all_summaries.append(summary)
                     elif cooldown_filter == "flash_no_cooldown":
                         # 只保留 Flash 系列未冷却的凭证（不管 Pro 是否冷却）
-                        if not any("flash" in k.lower() for k in active_cooldowns):
+                        if not cooldowns_affect_family(active_cooldowns, "flash"):
                             all_summaries.append(summary)
                     elif cooldown_filter == "claude_no_cooldown":
                         # 只保留 Claude 系列未冷却的凭证（不管 Pro/Flash 是否冷却）
-                        if not any("claude" in k.lower() for k in active_cooldowns):
+                        if not cooldowns_affect_family(active_cooldowns, "claude"):
                             all_summaries.append(summary)
                     else:
                         all_summaries.append(summary)
