@@ -1,4 +1,4 @@
-full_hash=0564cea19dd31af7a50780e463f4eea05ba40d20
-short_hash=0564cea
-message=Merge fix/stream-tool-call-index: anti tier persist + cooldown family grouping
-date=2026-09-13 01:35:32 +0000
+full_hash=0fee6967cdb30205b1ee846985e28e064d25d928
+short_hash=0fee696
+message=feat(panel): 批量下载选中凭证 + 批量复制邮箱
+date=2026-09-16 17:32:21 +0000
