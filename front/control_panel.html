@@ -1883,6 +1883,10 @@
                             disabled>批量额度检测/双向同步冷却</button>
                         <button class="batch-btn" id="batchPreviewBtn" onclick="batchConfigurePreview()"
                             disabled>批量设置预览</button>
+                        <button class="batch-btn" id="batchDownloadSelectedBtn" onclick="batchDownloadSelected()"
+                            disabled>批量下载选中</button>
+                        <button class="batch-btn batch-email" id="batchCopyEmailsBtn" onclick="batchCopyEmails()"
+                            disabled>批量复制邮箱</button>
                         <button class="batch-btn batch-email" onclick="refreshAllEmails()">刷新所有邮箱</button>
                         <button class="batch-btn" onclick="deduplicateByEmail()">凭证一键去重</button>
                     </div>
@@ -2116,6 +2120,10 @@
                             onclick="batchTestSelectedAntigravityCredentials()" disabled>批量消息测试</button>
                         <button class="batch-btn" id="antigravityBatchRefreshCooldownBtn"
                             onclick="batchRefreshCooldownSelectedAntigravityCredentials()" disabled>批量额度检测/双向同步冷却</button>
+                        <button class="batch-btn" id="antigravityBatchDownloadSelectedBtn"
+                            onclick="batchDownloadSelectedAntigravity()" disabled>批量下载选中</button>
+                        <button class="batch-btn batch-email" id="antigravityBatchCopyEmailsBtn"
+                            onclick="batchCopyAntigravityEmails()" disabled>批量复制邮箱</button>
                         <button class="batch-btn batch-email" onclick="refreshAllAntigravityEmails()">刷新所有邮箱</button>
                         <button class="batch-btn" onclick="deduplicateAntigravityByEmail()">凭证一键去重</button>
                     </div>

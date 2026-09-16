@@ -72,6 +72,8 @@ function createCredsManager(type) {
                 batchRefreshCooldown: `./creds/batch-refresh-cooldown`,
                 download: `./creds/download`,
                 downloadAll: `./creds/download-all`,
+                downloadSelected: `./creds/download-selected`,
+                copyEmails: `./creds/copy-emails`,
                 detail: `./creds/detail`,
                 fetchEmail: `./creds/fetch-email`,
                 refreshAllEmails: `./creds/refresh-all-emails`,
@@ -279,7 +281,7 @@ function createCredsManager(type) {
             const selectedCount = this.selectedFiles.size;
             document.getElementById(this.getElementId('SelectedCount')).textContent = `已选择 ${selectedCount} 项`;
 
-            const batchBtnNames = ['Enable', 'Disable', 'PermanentDisable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown'];
+            const batchBtnNames = ['Enable', 'Disable', 'PermanentDisable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown', 'DownloadSelected', 'CopyEmails'];
             if (this.type === 'antigravity') {
                 batchBtnNames.push('EnableCredit');
                 batchBtnNames.push('DisableCredit');
@@ -381,6 +383,107 @@ function createCredsManager(type) {
                 }
             } catch (error) {
                 showStatus(`批量操作网络错误: ${error.message}`, 'error');
+            }
+        },
+
+        // 批量下载选中的凭证（打包为 zip）
+        async batchDownloadSelected() {
+            const selectedFiles = Array.from(this.selectedFiles);
+
+            if (selectedFiles.length === 0) {
+                showStatus('请先选择要下载的文件', 'error');
+                return;
+            }
+
+            try {
+                showStatus(`正在打包 ${selectedFiles.length} 个选中凭证...`, 'info');
+
+                const response = await fetch(`${this.getEndpoint('downloadSelected')}?${this.getModeParam()}`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ action: 'download_selected', filenames: selectedFiles })
+                });
+
+                if (!response.ok) {
+                    let detail = '未知错误';
+                    try {
+                        const data = await response.json();
+                        detail = data.detail || data.error || detail;
+                    } catch (e) { }
+                    showStatus(`批量下载失败: ${detail}`, 'error');
+                    return;
+                }
+
+                const missingRaw = response.headers.get('X-Missing-Creds');
+                const missingEncoded = response.headers.get('X-Missing-Creds-Encoded');
+                const missing = missingRaw ? (missingEncoded === '1' ? decodeURIComponent(missingRaw) : missingRaw) : null;
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = this.type === 'antigravity' ? 'antigravity_credentials_selected.zip' : 'credentials_selected.zip';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                if (missing) {
+                    showStatus(`打包下载完成，但部分文件缺失：${missing}`, 'info');
+                } else {
+                    showStatus(`打包下载完成：${selectedFiles.length} 个文件`, 'success');
+                }
+            } catch (error) {
+                showStatus(`批量下载网络错误: ${error.message}`, 'error');
+            }
+        },
+
+        // 批量复制选中凭证的邮箱
+        async batchCopyEmails() {
+            const selectedFiles = Array.from(this.selectedFiles);
+
+            if (selectedFiles.length === 0) {
+                showStatus('请先选择要复制邮箱的文件', 'error');
+                return;
+            }
+
+            try {
+                showStatus(`正在获取 ${selectedFiles.length} 个选中凭证的邮箱...`, 'info');
+
+                const response = await fetch(`${this.getEndpoint('copyEmails')}?${this.getModeParam()}`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ action: 'copy_emails', filenames: selectedFiles })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    showStatus(`批量复制邮箱失败: ${data.detail || data.error || '未知错误'}`, 'error');
+                    return;
+                }
+
+                if (!data.emails || data.emails.length === 0) {
+                    const noEmail = (data.missing_detail && data.missing_detail.no_email) || [];
+                    showMessageModal('无邮箱可复制',
+                        `选中的 ${data.total_requested} 个凭证都没有邮箱${noEmail.length ? '，例如：\n' + noEmail.slice(0, 5).join('\n') : ''}\n\n可先点「刷新所有邮箱」补齐后再试。`, 'info');
+                    return;
+                }
+
+                const text = data.emails.join('\n');
+                const copied = await copyTextToClipboard(text);
+
+                const notes = [];
+                if (data.without_email > 0) notes.push(`${data.without_email} 个无邮箱`);
+                if (data.not_found > 0) notes.push(`${data.not_found} 个不存在`);
+                const dedupNote = data.emails.length < data.with_email ? `（去重前 ${data.with_email} 个）` : '';
+
+                if (copied) {
+                    showStatus(`已复制 ${data.emails.length} 个邮箱到剪贴板${dedupNote}${notes.length ? '；' + notes.join('、') : ''}`, 'success');
+                } else {
+                    showMessageModal('邮箱清单（剪贴板不可用，请手动复制）', text, 'info');
+                }
+            } catch (error) {
+                showStatus(`批量复制邮箱网络错误: ${error.message}`, 'error');
             }
         }
     };
@@ -545,6 +648,30 @@ function createUploadManager(type) {
 // =====================================================================
 // 工具函数
 // =====================================================================
+// 剪贴板复制（http 环境降级 execCommand）
+async function copyTextToClipboard(text) {
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch (e) { /* 降级 */ }
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch (e) {
+        return false;
+    }
+}
+
 function showStatus(message, type = 'info') {
     const statusSection = document.getElementById('statusSection');
     if (statusSection) {
@@ -1596,6 +1723,14 @@ function toggleSelectAllAntigravity() {
     AppState.antigravityCreds.updateBatchControls();
 }
 function batchAntigravityAction(action) { AppState.antigravityCreds.batchAction(action); }
+
+// 批量下载选中凭证（打包 zip）
+async function batchDownloadSelected() { await AppState.creds.batchDownloadSelected(); }
+async function batchDownloadSelectedAntigravity() { await AppState.antigravityCreds.batchDownloadSelected(); }
+
+// 批量复制选中凭证的邮箱
+async function batchCopyEmails() { await AppState.creds.batchCopyEmails(); }
+async function batchCopyAntigravityEmails() { await AppState.antigravityCreds.batchCopyEmails(); }
 function downloadAntigravityCred(filename) {
     fetch(`./creds/download/${filename}?mode=antigravity`, { headers: getAuthHeaders() })
         .then(r => r.ok ? r.blob() : Promise.reject())

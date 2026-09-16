@@ -10,6 +10,7 @@ import os
 import time
 import zipfile
 from typing import Any, List, Optional, Tuple
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Response, Body
 from fastapi.responses import JSONResponse
@@ -19,6 +20,7 @@ from src.credential_manager import credential_manager
 from src.models import (
     CredFileActionRequest,
     CredFileBatchActionRequest,
+    CredFilenameListRequest,
     CredFileBatchTestRequest,
     RefreshTokenAddRequest,
     RefreshTokenBatchAddRequest,
@@ -1189,6 +1191,134 @@ async def download_all_creds(
         raise
     except Exception as e:
         log.error(f"打包下载失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/download-selected")
+async def download_selected_creds(
+    request: CredFilenameListRequest,
+    token: str = Depends(verify_panel_token),
+    mode: str = "geminicli"
+):
+    """
+    打包下载选中的凭证文件（复用全量打包逻辑，仅限请求的文件名列表）
+    """
+    try:
+        mode = validate_mode(mode)
+        filenames = [f for f in (request.filenames or []) if f]
+        if not filenames:
+            raise HTTPException(status_code=400, detail="文件名列表不能为空")
+
+        zip_filename = "antigravity_credentials_selected.zip" if mode == "antigravity" else "credentials_selected.zip"
+
+        storage_adapter = await get_storage_adapter()
+
+        log.info(f"开始打包选中的 {len(filenames)} 个 {mode} 凭证文件...")
+
+        zip_buffer = io.BytesIO()
+        success_count = 0
+        missing = []
+
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for filename in filenames:
+                if not filename.endswith(".json"):
+                    missing.append(f"{filename}: 无效的文件类型")
+                    continue
+                try:
+                    credential_data = await storage_adapter.get_credential(os.path.basename(filename), mode=mode)
+                    if not credential_data:
+                        missing.append(f"{filename}: 凭证不存在")
+                        continue
+                    content = json.dumps(credential_data, ensure_ascii=False, indent=2)
+                    zip_file.writestr(os.path.basename(filename), content)
+                    success_count += 1
+                except Exception as e:
+                    log.warning(f"处理选中的 {mode} 凭证文件 {filename} 时出错: {e}")
+                    missing.append(f"{filename}: {str(e)}")
+                    continue
+
+        if success_count == 0:
+            detail = "没有可下载的选中凭证文件"
+            if missing:
+                detail += "：" + "；".join(missing[:10])
+            raise HTTPException(status_code=404, detail=detail)
+
+        log.info(f"选中打包完成: 成功 {success_count}/{len(filenames)} 个文件")
+
+        headers = {"Content-Disposition": f"attachment; filename={zip_filename}"}
+        if missing:
+            # 部分失败时附带缺失清单（自定义头；中文需 URL 编码否则 latin-1 报错）
+            headers["X-Missing-Creds-Encoded"] = "1"
+            headers["X-Missing-Creds"] = quote(" ; ".join(missing))[:2000]
+
+        zip_buffer.seek(0)
+        return Response(
+            content=zip_buffer.getvalue(),
+            media_type="application/zip",
+            headers=headers,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"选中打包下载失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/copy-emails")
+async def copy_selected_emails(
+    request: CredFilenameListRequest,
+    token: str = Depends(verify_panel_token),
+    mode: str = "geminicli"
+):
+    """
+    批量获取选中凭证的邮箱（只读 user_email 字段，不做任何网络请求）
+    返回 filename→email 映射与邮箱清单
+    """
+    try:
+        mode = validate_mode(mode)
+        filenames = [f for f in (request.filenames or []) if f]
+        if not filenames:
+            raise HTTPException(status_code=400, detail="文件名列表不能为空")
+
+        storage_adapter = await get_storage_adapter()
+        all_states = await storage_adapter.get_all_credential_states(mode=mode)
+
+        email_map = {}
+        no_email = []
+        not_found = []
+        for filename in filenames:
+            base = os.path.basename(filename)
+            state = all_states.get(base)
+            if state is None:
+                not_found.append(base)
+                continue
+            email = (state or {}).get("user_email")
+            if email:
+                email_map[base] = email
+            else:
+                no_email.append(base)
+
+        emails = list(dict.fromkeys(email_map.values()))
+        log.info(f"批量复制邮箱: 命中 {len(email_map)}/{len(filenames)}，去重后 {len(emails)} 个邮箱")
+
+        return JSONResponse(content={
+            "total_requested": len(filenames),
+            "with_email": len(email_map),
+            "without_email": len(no_email),
+            "not_found": len(not_found),
+            "email_map": email_map,
+            "emails": emails,
+            "missing_detail": {
+                "no_email": no_email[:50],
+                "not_found": not_found[:50],
+            },
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"批量复制邮箱失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
