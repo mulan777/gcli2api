@@ -4,6 +4,7 @@ Antigravity Format Utilities - 独立的 Antigravity 请求处理和转换工具
 ────────────────────────────────────────────────────────────────
 """
 import json
+import time
 import uuid
 from typing import Any, Dict, Optional
 
@@ -679,6 +680,40 @@ def clear_antigravity_cooldown_family(cooldowns: dict, model_name: str) -> dict:
         for key, value in source.items()
         if normalize_antigravity_cooldown_key(key) != target
     }
+
+
+def _cooldown_cycle_family(key: str) -> str:
+    """冷却键的轮次族归属：所有 gemini 模型共享同一上游配额桶，算一族；
+    claude 与 gpt-oss 共享一族；其余键各自一族。"""
+    k = str(key or "").strip().lower()
+    if k.startswith("gemini"):
+        return "gemini"
+    if k.startswith("claude") or k.startswith("gpt-oss"):
+        return "claude"
+    return k
+
+
+def has_active_family_cooldown(cooldowns: dict, model_name: str) -> bool:
+    """判断目标模型同轮次族是否有任何仍在生效的冷却锁（含共享键与具体键）。
+
+    轮次结算判定用：同一上游配额桶（gemini 全系 / claude+gpt-oss 系 /
+    其余单键）内只要还有一把活跃锁，就不结算新轮次。
+    注意：必须在写入本键新冷却之前调用，否则本键自身会污染判定。
+    """
+    if not isinstance(cooldowns, dict):
+        return False
+    target = _cooldown_cycle_family(model_name)
+    now = time.time()
+    for key, value in cooldowns.items():
+        if _cooldown_cycle_family(key) != target:
+            continue
+        try:
+            until = float(value)
+        except (TypeError, ValueError):
+            continue
+        if until > now:
+            return True
+    return False
 
 
 def cooldowns_affect_family(active_cooldowns: dict, family: str) -> bool:

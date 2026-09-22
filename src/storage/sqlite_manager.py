@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import aiosqlite
 
 from log import log
-from src.converter.antigravity_fix import cooldowns_affect_family
+from src.converter.antigravity_fix import cooldowns_affect_family, has_active_family_cooldown
 
 
 class SQLiteManager:
@@ -1467,8 +1467,13 @@ class SQLiteManager:
                     model_cooldowns.pop(model_name, None)
                 else:
                     previous_until = model_cooldowns.get(model_name)
+                    family_was_idle = not has_active_family_cooldown(
+                        model_cooldowns, model_name
+                    )
                     model_cooldowns[model_name] = cooldown_until
-                    close_cycle = not previous_until or previous_until <= time.time()
+                    close_cycle = (
+                        not previous_until or previous_until <= time.time()
+                    ) and family_was_idle
 
                 if close_cycle:
                     new_cycle_stats, last_cycle_stats = self._close_cycle_stats(row[1], model_name)

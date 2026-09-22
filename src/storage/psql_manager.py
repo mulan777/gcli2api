@@ -14,6 +14,7 @@ import asyncpg
 from log import log
 from src.converter.antigravity_fix import (
     clear_antigravity_cooldown_family,
+    has_active_family_cooldown,
     cooldowns_affect_family,
     get_antigravity_cooldown_until,
     normalize_antigravity_cooldown_key,
@@ -1243,11 +1244,16 @@ class PSQLManager:
                         model_cooldowns.pop(cooldown_key, None)
                 else:
                     previous_until = get_antigravity_cooldown_until(model_cooldowns, cooldown_key)
+                    family_was_idle = not has_active_family_cooldown(
+                        model_cooldowns, cooldown_key
+                    )
                     model_cooldowns[cooldown_key] = max(
                         float(cooldown_until),
                         float(previous_until or 0),
                     )
-                    close_cycle = not previous_until or previous_until <= time.time()
+                    close_cycle = (
+                        not previous_until or previous_until <= time.time()
+                    ) and family_was_idle
 
                 if close_cycle:
                     new_cycle_stats, last_cycle_stats = self._close_cycle_stats(row["cycle_stats"], cooldown_key)
