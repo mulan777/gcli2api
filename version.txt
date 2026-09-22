@@ -1,4 +1,4 @@
-full_hash=1d71850ca2551c2d38d38d823f5c6d7a4408d3bb
-short_hash=1d71850
-message=Merge lifetime-rebuild: v2.0 lifetime_stats 终身累计统计
-date=2026-09-22 05:58:31
+full_hash=f0fd1eb8b89a610e7273bfbd04c577cc1efdd8b3
+short_hash=f0fd1eb
+message=fix(stats): 冷却轮次结算改为同族判定——gemini 全系共享一轮、claude/gpt-oss 一轮
+date=2026-09-22 05:02:58 +0000
