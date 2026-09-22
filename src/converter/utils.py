@@ -148,8 +148,14 @@ async def merge_system_messages(request_body: Dict[str, Any]) -> Dict[str, Any]:
             # system 可以是包含多个块的列表
             for item in system_content:
                 if isinstance(item, dict):
-                    if item.get("type") == "text" and item.get("text", "").strip():
-                        system_parts.append({"text": item["text"]})
+                    if item.get("type") == "text":
+                        tv = item.get("text", "")
+                        if isinstance(tv, dict):
+                            tv = tv.get("text", "")
+                        if isinstance(tv, str) and tv.strip():
+                            system_parts.append({"text": tv})
+                        elif tv not in ("", None) and not isinstance(tv, str):
+                            system_parts.append({"text": str(tv)})
                 elif isinstance(item, str) and item.strip():
                     system_parts.append({"text": item})
         

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import aiosqlite
 
 from log import log
+from src.converter.antigravity_fix import cooldowns_affect_family
 
 
 class SQLiteManager:
@@ -24,6 +25,7 @@ class SQLiteManager:
         "permanent_disabled",
         "cycle_stats",
         "last_cycle_stats",
+        "lifetime_stats",
         "last_success",
         "user_email",
         "model_cooldowns",
@@ -34,6 +36,7 @@ class SQLiteManager:
         "success_count",
         "failure_count",
         "remark",
+        "licensable",
     }
 
     # 所有必需的列定义（用于自动校验和修复）
@@ -41,8 +44,10 @@ class SQLiteManager:
         "credentials": [
             ("disabled", "INTEGER DEFAULT 0"),
             ("permanent_disabled", "INTEGER DEFAULT 0"),
+            ("licensable", "INTEGER DEFAULT 0"),
             ("cycle_stats", "TEXT DEFAULT '{}'"),
             ("last_cycle_stats", "TEXT DEFAULT '{}'"),
+            ("lifetime_stats", "TEXT DEFAULT '{}'"),
             ("error_codes", "TEXT DEFAULT '[]'"),
             ("error_messages", "TEXT DEFAULT '[]'"),
             ("last_success", "REAL"),
@@ -61,8 +66,10 @@ class SQLiteManager:
         "antigravity_credentials": [
             ("disabled", "INTEGER DEFAULT 0"),
             ("permanent_disabled", "INTEGER DEFAULT 0"),
+            ("licensable", "INTEGER DEFAULT 0"),
             ("cycle_stats", "TEXT DEFAULT '{}'"),
             ("last_cycle_stats", "TEXT DEFAULT '{}'"),
+            ("lifetime_stats", "TEXT DEFAULT '{}'"),
             ("error_codes", "TEXT DEFAULT '[]'"),
             ("error_messages", "TEXT DEFAULT '[]'"),
             ("last_success", "REAL"),
@@ -185,8 +192,10 @@ class SQLiteManager:
                 -- 状态字段
                 disabled INTEGER DEFAULT 0,
                 permanent_disabled INTEGER DEFAULT 0,
+                licensable INTEGER DEFAULT 0,
                 cycle_stats TEXT DEFAULT '{}',
                 last_cycle_stats TEXT DEFAULT '{}',
+                lifetime_stats TEXT DEFAULT '{}',
                 error_codes TEXT DEFAULT '[]',
                 error_messages TEXT DEFAULT '[]',
                 last_success REAL,
@@ -224,8 +233,10 @@ class SQLiteManager:
                 -- 状态字段
                 disabled INTEGER DEFAULT 0,
                 permanent_disabled INTEGER DEFAULT 0,
+                licensable INTEGER DEFAULT 0,
                 cycle_stats TEXT DEFAULT '{}',
                 last_cycle_stats TEXT DEFAULT '{}',
+                lifetime_stats TEXT DEFAULT '{}',
                 error_codes TEXT DEFAULT '[]',
                 error_messages TEXT DEFAULT '[]',
                 last_success REAL,
@@ -800,7 +811,7 @@ class SQLiteManager:
                 if mode == "geminicli":
                     async with db.execute(f"""
                         SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
-                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, lifetime_stats, remark
                         FROM {table_name} WHERE filename = ?
                     """, (filename,)) as cursor:
                         row = await cursor.fetchone()
@@ -841,7 +852,7 @@ class SQLiteManager:
                     # antigravity 模式
                     async with db.execute(f"""
                         SELECT disabled, error_codes, last_success, user_email, model_cooldowns, model_disabled,
-                               tier, enable_credit, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               tier, enable_credit, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, lifetime_stats, remark
                         FROM {table_name} WHERE filename = ?
                     """, (filename,)) as cursor:
                         row = await cursor.fetchone()
@@ -895,7 +906,7 @@ class SQLiteManager:
                     async with db.execute(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, lifetime_stats, remark
                         FROM {table_name}
                     """) as cursor:
                         rows = await cursor.fetchall()
@@ -938,7 +949,7 @@ class SQLiteManager:
                     async with db.execute(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, model_cooldowns, model_disabled, tier, enable_credit,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, lifetime_stats, remark
                         FROM {table_name}
                     """) as cursor:
                         rows = await cursor.fetchall()
@@ -1017,15 +1028,17 @@ class SQLiteManager:
 
             async with aiosqlite.connect(self._db_path) as db:
                 # 先计算全局统计数据（不受筛选条件影响）
-                global_stats = {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0}
+                global_stats = {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0, "licensable": 0}
                 async with db.execute(f"""
-                    SELECT disabled, permanent_disabled, COUNT(*) FROM {table_name} GROUP BY disabled, permanent_disabled
+                    SELECT disabled, permanent_disabled, COALESCE(licensable, 0), COUNT(*) FROM {table_name} GROUP BY disabled, permanent_disabled, COALESCE(licensable, 0)
                 """) as stats_cursor:
                     stats_rows = await stats_cursor.fetchall()
-                    for disabled, permanent_disabled, count in stats_rows:
+                    for disabled, permanent_disabled, licensable, count in stats_rows:
                         global_stats["total"] += count
                         if permanent_disabled:
                             global_stats["permanent_disabled"] += count
+                        elif disabled and licensable:
+                            global_stats["licensable"] += count
                         elif disabled:
                             global_stats["disabled"] += count
                         else:
@@ -1038,9 +1051,11 @@ class SQLiteManager:
                 if status_filter == "enabled":
                     where_clauses.append("disabled = 0 AND COALESCE(permanent_disabled, 0) = 0")
                 elif status_filter == "disabled":
-                    where_clauses.append("disabled = 1 AND COALESCE(permanent_disabled, 0) = 0")
+                    where_clauses.append("disabled = 1 AND COALESCE(permanent_disabled, 0) = 0 AND COALESCE(licensable, 0) = 0")
                 elif status_filter == "permanent_disabled":
                     where_clauses.append("COALESCE(permanent_disabled, 0) = 1")
+                elif status_filter == "licensable":
+                    where_clauses.append("disabled = 1 AND COALESCE(permanent_disabled, 0) = 0 AND COALESCE(licensable, 0) = 1")
 
                 filter_value = None
                 filter_int = None
@@ -1065,7 +1080,8 @@ class SQLiteManager:
                     all_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats,
+                               COALESCE(licensable, 0), lifetime_stats, remark
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -1074,7 +1090,8 @@ class SQLiteManager:
                     all_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, model_disabled, tier, enable_credit,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats,
+                               COALESCE(licensable, 0), lifetime_stats, remark
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -1131,6 +1148,7 @@ class SQLiteManager:
                             summary = {
                                 "filename": filename,
                                 "disabled": bool(row[1]),
+                                "licensable": bool(row[-1]) if len(row) > 15 else False,
                                 "permanent_disabled": bool(row[11]) if len(row) > 11 else False,
                                 "error_codes": error_codes,
                                 "last_success": row[3] or current_time,
@@ -1150,6 +1168,7 @@ class SQLiteManager:
                             summary = {
                                 "filename": filename,
                                 "disabled": bool(row[1]),
+                                "licensable": bool(row[-1]) if len(row) > 16 else False,
                                 "permanent_disabled": bool(row[12]) if len(row) > 12 else False,
                                 "error_codes": error_codes,
                                 "last_success": row[3] or current_time,
@@ -1191,15 +1210,15 @@ class SQLiteManager:
                                 all_summaries.append(summary)
                         elif cooldown_filter == "pro_no_cooldown":
                             # 只保留 Pro 系列未冷却的凭证（不管 Flash 是否冷却）
-                            if not any("pro" in k.lower() for k in active_cooldowns):
+                            if not cooldowns_affect_family(active_cooldowns, "pro"):
                                 all_summaries.append(summary)
                         elif cooldown_filter == "flash_no_cooldown":
                             # 只保留 Flash 系列未冷却的凭证（不管 Pro 是否冷却）
-                            if not any("flash" in k.lower() for k in active_cooldowns):
+                            if not cooldowns_affect_family(active_cooldowns, "flash"):
                                 all_summaries.append(summary)
                         elif cooldown_filter == "claude_no_cooldown":
                             # 只保留 Claude 系列未冷却的凭证（不管 Pro/Flash 是否冷却）
-                            if not any("claude" in k.lower() for k in active_cooldowns):
+                            if not cooldowns_affect_family(active_cooldowns, "claude"):
                                 all_summaries.append(summary)
                         else:
                             # 不筛选冷却状态
@@ -1433,7 +1452,7 @@ class SQLiteManager:
             table_name = self._get_table_name(mode)
             async with aiosqlite.connect(self._db_path) as db:
                 async with db.execute(
-                    f"SELECT model_cooldowns, cycle_stats FROM {table_name} WHERE filename = ?",
+                    f"SELECT model_cooldowns, cycle_stats, lifetime_stats FROM {table_name} WHERE filename = ?",
                     (filename,),
                 ) as cursor:
                     row = await cursor.fetchone()
@@ -1453,14 +1472,16 @@ class SQLiteManager:
 
                 if close_cycle:
                     new_cycle_stats, last_cycle_stats = self._close_cycle_stats(row[1], model_name)
+                    new_lifetime = self._bump_lifetime_close(row[2] if row and len(row) > 2 else None, self._model_cycle_family(model_name), int(json.loads(last_cycle_stats).get("total", 0) or 0))
                     await db.execute(f"""
                         UPDATE {table_name}
                         SET model_cooldowns = ?,
                             cycle_stats = ?,
                             last_cycle_stats = ?,
+                            lifetime_stats = ?,
                             updated_at = unixepoch()
                         WHERE filename = ?
-                    """, (json.dumps(model_cooldowns), new_cycle_stats, last_cycle_stats, filename))
+                    """, (json.dumps(model_cooldowns), new_cycle_stats, last_cycle_stats, new_lifetime, filename))
                 else:
                     await db.execute(f"""
                         UPDATE {table_name}
@@ -1529,13 +1550,14 @@ class SQLiteManager:
         try:
             table_name = self._get_table_name(mode)
             async with aiosqlite.connect(self._db_path) as db:
-                async with db.execute(f"SELECT cycle_stats FROM {table_name} WHERE filename = ?", (filename,)) as stats_cursor:
+                async with db.execute(f"SELECT cycle_stats, lifetime_stats FROM {table_name} WHERE filename = ?", (filename,)) as stats_cursor:
                     stats_row = await stats_cursor.fetchone()
                 await db.execute(f"""
                     UPDATE {table_name}
                     SET success_count = COALESCE(success_count, 0) + 1,
                         call_count = COALESCE(call_count, 0) + 1,
                         cycle_stats = ?,
+                        lifetime_stats = ?,
                         last_success = unixepoch(),
                         error_codes = CASE
                             WHEN error_codes IS NOT NULL AND error_codes != '[]' AND error_codes != ''
@@ -1545,7 +1567,8 @@ class SQLiteManager:
                             THEN '{{}}' ELSE error_messages END,
                         updated_at = unixepoch()
                     WHERE filename = ?
-                """, (self._bump_cycle_stats(stats_row[0] if stats_row else None, model_name, success=True), filename,))
+                """, (self._bump_cycle_stats(stats_row[0] if stats_row else None, model_name, success=True),
+                     self._bump_lifetime_stats(stats_row[1] if stats_row and len(stats_row) > 1 else None, model_name), filename,))
 
                 # 条件删除模型冷却：只有模型键存在时才写入
                 if model_name:
@@ -1587,13 +1610,14 @@ class SQLiteManager:
                 error_messages[str(error_code)] = error_message
 
             async with aiosqlite.connect(self._db_path) as db:
-                async with db.execute(f"SELECT cycle_stats FROM {table_name} WHERE filename = ?", (filename,)) as stats_cursor:
+                async with db.execute(f"SELECT cycle_stats, lifetime_stats FROM {table_name} WHERE filename = ?", (filename,)) as stats_cursor:
                     stats_row = await stats_cursor.fetchone()
                 await db.execute(f"""
                     UPDATE {table_name}
                     SET failure_count = COALESCE(failure_count, 0) + 1,
                         call_count = COALESCE(call_count, 0) + 1,
                         cycle_stats = ?,
+                        lifetime_stats = ?,
                         error_codes = ?,
                         error_messages = ?,
                         updated_at = unixepoch()
@@ -1603,6 +1627,7 @@ class SQLiteManager:
                     json.dumps([error_code]),
                     json.dumps(error_messages),
                     filename,
+                    self._bump_lifetime_stats(stats_row[1] if stats_row and len(stats_row) > 1 else None, model_name),
                 ))
                 await db.commit()
 
@@ -1622,6 +1647,26 @@ class SQLiteManager:
     @staticmethod
     def _is_claude_model(model_name: Optional[str]) -> bool:
         return "claude" in (model_name or "").lower()
+
+    @staticmethod
+    def _bump_lifetime_stats(raw: Optional[str], model_name: Optional[str]) -> str:
+        "跨轮次终身累计：不受冷却结算/导入重置影响。"
+        now = time.time()
+        try:
+            stats = json.loads(raw or "{}")
+        except Exception:
+            stats = {}
+        if not isinstance(stats, dict):
+            stats = {}
+        stats.setdefault("total", 0)
+        stats.setdefault("pro", 0)
+        stats.setdefault("flash", 0)
+        stats.setdefault("other", 0)
+        stats["total"] = int(stats.get("total") or 0) + 1
+        family = SQLiteManager._model_cycle_family(model_name)
+        stats[family] = int(stats.get(family) or 0) + 1
+        stats["updated_at"] = now
+        return json.dumps(stats)
 
     @staticmethod
     def _bump_cycle_stats(raw: Optional[str], model_name: Optional[str], success: bool = True) -> str:
@@ -1645,6 +1690,29 @@ class SQLiteManager:
             key = "claude_success" if success else "claude_failure"
             stats[key] = int(stats.get(key) or 0) + 1
         stats["updated_at"] = now
+        return json.dumps(stats)
+
+    @staticmethod
+    def _bump_lifetime_close(raw: Optional[str], family: Optional[str], closed_total: int = 0) -> str:
+        # 轮次结算时累计：cycles=完结轮次数，closed_*=已完结轮次各族的合计
+        now = time.time()
+        try:
+            stats = json.loads(raw or "{}")
+        except Exception:
+            stats = {}
+        if not isinstance(stats, dict):
+            stats = {}
+        stats.setdefault("cycles", 0)
+        stats.setdefault("closed_pro", 0)
+        stats.setdefault("closed_flash", 0)
+        stats.setdefault("closed_other", 0)
+        stats.setdefault("closed_total", 0)
+        stats["cycles"] = int(stats.get("cycles") or 0) + 1
+        fam = family if family in ("pro", "flash", "other") else "other"
+        key = "closed_" + fam
+        stats[key] = int(stats.get(key) or 0) + max(int(closed_total or 0), 0)
+        stats["closed_total"] = int(stats.get("closed_total") or 0) + max(int(closed_total or 0), 0)
+        stats["last_closed_at"] = now
         return json.dumps(stats)
 
     @staticmethod
@@ -1720,6 +1788,26 @@ class SQLiteManager:
         return "other"
 
     @staticmethod
+    def _bump_lifetime_stats(raw: Optional[str], model_name: Optional[str]) -> str:
+        "跨轮次终身累计：不受冷却结算/导入重置影响。"
+        now = time.time()
+        try:
+            stats = json.loads(raw or "{}")
+        except Exception:
+            stats = {}
+        if not isinstance(stats, dict):
+            stats = {}
+        stats.setdefault("total", 0)
+        stats.setdefault("pro", 0)
+        stats.setdefault("flash", 0)
+        stats.setdefault("other", 0)
+        stats["total"] = int(stats.get("total") or 0) + 1
+        family = SQLiteManager._model_cycle_family(model_name)
+        stats[family] = int(stats.get(family) or 0) + 1
+        stats["updated_at"] = now
+        return json.dumps(stats)
+
+    @staticmethod
     def _bump_cycle_stats(raw: Optional[str], model_name: Optional[str], success: bool = True) -> str:
         now = time.time()
         try:
@@ -1741,6 +1829,29 @@ class SQLiteManager:
             key = "claude_success" if success else "claude_failure"
             stats[key] = int(stats.get(key) or 0) + 1
         stats["updated_at"] = now
+        return json.dumps(stats)
+
+    @staticmethod
+    def _bump_lifetime_close(raw: Optional[str], family: Optional[str], closed_total: int = 0) -> str:
+        # 轮次结算时累计：cycles=完结轮次数，closed_*=已完结轮次各族的合计
+        now = time.time()
+        try:
+            stats = json.loads(raw or "{}")
+        except Exception:
+            stats = {}
+        if not isinstance(stats, dict):
+            stats = {}
+        stats.setdefault("cycles", 0)
+        stats.setdefault("closed_pro", 0)
+        stats.setdefault("closed_flash", 0)
+        stats.setdefault("closed_other", 0)
+        stats.setdefault("closed_total", 0)
+        stats["cycles"] = int(stats.get("cycles") or 0) + 1
+        fam = family if family in ("pro", "flash", "other") else "other"
+        key = "closed_" + fam
+        stats[key] = int(stats.get(key) or 0) + max(int(closed_total or 0), 0)
+        stats["closed_total"] = int(stats.get("closed_total") or 0) + max(int(closed_total or 0), 0)
+        stats["last_closed_at"] = now
         return json.dumps(stats)
 
     @staticmethod

@@ -290,6 +290,59 @@ def _normalize_tools_for_internal_api(tools: Any) -> Any:
     return normalized_tools
 
 
+def _normalize_claude_text_value(value: Any) -> str:
+    """将 Claude 文本 part 中的嵌套文本安全地归一化为字符串。"""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            text = _normalize_claude_text_value(item)
+            if text:
+                parts.append(text)
+        return " ".join(parts)
+    if isinstance(value, dict):
+        if "text" in value:
+            return _normalize_claude_text_value(value.get("text"))
+        return ""
+    return str(value)
+
+
+def _normalize_claude_text_parts(contents: Any) -> Any:
+    """只修 Claude/Opus 的 text 字段，不改工具或其他 part。"""
+    if not isinstance(contents, list):
+        return contents
+
+    normalized_contents = []
+    for content in contents:
+        if not isinstance(content, dict) or not isinstance(content.get("parts"), list):
+            normalized_contents.append(content)
+            continue
+
+        normalized_parts = []
+        for part in content["parts"]:
+            if not isinstance(part, dict) or "text" not in part:
+                normalized_parts.append(part)
+                continue
+
+            normalized_text = _normalize_claude_text_value(part.get("text"))
+            if not normalized_text.strip():
+                log.warning("[ANTIGRAVITY_FIX] 移除空 Claude 文本 part")
+                continue
+
+            normalized_part = part.copy()
+            normalized_part["text"] = normalized_text.rstrip()
+            normalized_parts.append(normalized_part)
+
+        normalized_content = content.copy()
+        normalized_content["parts"] = normalized_parts
+        normalized_contents.append(normalized_content)
+
+    return normalized_contents
+
+
 def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str, mode: str = "antigravity") -> Any:
     if not isinstance(tools, list):
         return tools
@@ -628,6 +681,33 @@ def clear_antigravity_cooldown_family(cooldowns: dict, model_name: str) -> dict:
     }
 
 
+def cooldowns_affect_family(active_cooldowns: dict, family: str) -> bool:
+    """判断 active_cooldowns（已过滤过期）中是否有锁影响指定模型族。
+
+    与调度侧 normalize_antigravity_cooldown_key / get_antigravity_cooldown_until
+    语义保持一致，避免面板「X系列未冷却」分组只看键名字面量导致共享族锁漏判：
+    - gemini-shared 键同时锁 Pro 与 Flash（gemini-3.1-pro*、gemini-3.5/3.6/3.7-flash*）
+    - claude-gpt-shared 键同时锁 Claude 与 gpt-oss 系列
+    - gemini-3.8-flash-* 等独立键按字面归 Flash
+    """
+    if not isinstance(active_cooldowns, dict):
+        return False
+    family = str(family or "").lower()
+    for key in active_cooldowns:
+        lowered = str(key).lower()
+        norm = normalize_antigravity_cooldown_key(lowered)
+        if family == "pro":
+            if norm == "gemini-shared" or "pro" in lowered:
+                return True
+        elif family == "flash":
+            if norm == "gemini-shared" or "flash" in lowered:
+                return True
+        elif family == "claude":
+            if norm == "claude-gpt-shared" or lowered.startswith("claude-") or lowered.startswith("gpt-oss-"):
+                return True
+    return False
+
+
 def get_antigravity_cooldown_until(cooldowns: dict, model_name: str):
     """读取共享键与旧具体键，兼容历史 CD 状态并返回最晚截止时间。"""
     if not isinstance(cooldowns, dict):
@@ -692,11 +772,22 @@ def _normalize_antigravity_request(
 
     # 针对 Gemini 模型：根据思考设置映射至真实的 Antigravity 后端模型 ID
     if "gemini" in model.lower():
+        original_model = model
 
-        # 既然 Antigravity 后端是通过模型名来确定思考深度的，
-        # 对于 Gemini 3/3.5 模型必须移除 thinkingConfig 以防止 API 返回参数冲突错误。
-        if "gemini-3" in model:
-            generation_config.pop("thinkingConfig", None)
+        # 兼容旧的客户端别名：Antigravity 后端的 Gemini 3.1 Pro High
+        # 实际使用 gemini-pro-agent 作为模型 ID。
+        if model.lower() == "gemini-3.1-pro-high":
+            model = "gemini-pro-agent"
+            log.debug(f"[ANTIGRAVITY] 映射模型: {original_model} -> {model}")
+
+        # Antigravity uses the Gemini 3.x model route/name to select thinking depth.
+        # Do not send thinkingLevel/thinkingBudget because they can conflict with that route.
+        # Keep includeThoughts so reasoning is still returned to the frontend when enabled.
+        if "gemini-3" in original_model.lower():
+            thinking_config = generation_config.setdefault("thinkingConfig", {})
+            thinking_config.pop("thinkingBudget", None)
+            thinking_config.pop("thinkingLevel", None)
+            thinking_config["includeThoughts"] = return_thoughts
         else:
             # 对于 Gemini 2.5 系列，保留 thinkingConfig
             if thinking:
@@ -815,6 +906,7 @@ async def normalize_antigravity_request(
         "sonnet",
         "gemini-3.6-flash",
         "gemini-3.7-flash",
+        "gemini-3.8-flash",
     ]
     if any(keyword in model.lower() for keyword in no_prefill_models):
         contents = result.get("contents", [])
@@ -853,6 +945,8 @@ async def normalize_antigravity_request(
         generation_config["topK"] = 64
 
     if "contents" in result:
+        if "claude" in model.lower():
+            result["contents"] = _normalize_claude_text_parts(result["contents"])
         result["contents"] = _ensure_tool_call_ids(result["contents"], model)
 
         cleaned_contents = []
@@ -895,6 +989,17 @@ async def normalize_antigravity_request(
                             elif isinstance(text_value, str):
                                 # 清理尾随空格
                                 part["text"] = text_value.rstrip()
+                            elif isinstance(text_value, dict):
+                                # Anthropic/OpenAI block 被误嵌套：{"text": {"type":"text","text":...}}，
+                                # 直接透传会触发上游 "messages.N.content.M.text.text: Field required"
+                                inner = text_value.get("text", "")
+                                if isinstance(inner, str) and inner.strip():
+                                    log.warning(f"[ANTIGRAVITY_FIX] text 字段是嵌套 block，自动解包")
+                                    part["text"] = inner
+                                elif inner:
+                                    part["text"] = str(inner)
+                                else:
+                                    part["text"] = ""
                             else:
                                 # 其他类型转为字符串
                                 log.warning(f"[ANTIGRAVITY_FIX] text 字段类型异常 ({type(text_value)}), 转为字符串: {text_value}")
@@ -915,6 +1020,29 @@ async def normalize_antigravity_request(
                 cleaned_contents.append(content)
 
         result["contents"] = cleaned_contents
+
+    # systemInstruction 同样做 text 归一化：上游(Vertex Claude端)会把它转成 messages[0]，
+    # parts[].text 若是嵌套 dict 会触发 "messages.0.content.0.text.text: Field required"
+    si = result.get("systemInstruction")
+    if isinstance(si, dict):
+        si_parts = si.get("parts")
+        if isinstance(si_parts, list):
+            fixed_si_parts = []
+            for sp in si_parts:
+                if isinstance(sp, dict) and "text" in sp:
+                    tv = sp["text"]
+                    if isinstance(tv, dict):
+                        inner = tv.get("text", "")
+                        sp = dict(sp)
+                        sp["text"] = inner if isinstance(inner, str) else str(inner)
+                        log.warning(f"[ANTIGRAVITY_FIX] systemInstruction text 嵌套 block 已解包")
+                    elif not isinstance(tv, str):
+                        sp = dict(sp)
+                        sp["text"] = str(tv)
+                fixed_si_parts.append(sp)
+            si = dict(si)
+            si["parts"] = fixed_si_parts
+            result["systemInstruction"] = si
 
     if generation_config:
         result["generationConfig"] = generation_config

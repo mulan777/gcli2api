@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from log import log
+from src.converter.antigravity_fix import cooldowns_affect_family
 
 
 class MongoDBManager:
@@ -1207,11 +1208,11 @@ class MongoDBManager:
                         all_summaries.append(summary)
                 elif cooldown_filter == "pro_no_cooldown":
                     # 只保留 Pro 系列未冷却的凭证（不管 Flash 是否冷却）
-                    if not any("pro" in k.lower() for k in active_cooldowns):
+                    if not cooldowns_affect_family(active_cooldowns, "pro"):
                         all_summaries.append(summary)
                 elif cooldown_filter == "flash_no_cooldown":
                     # 只保留 Flash 系列未冷却的凭证（不管 Pro 是否冷却）
-                    if not any("flash" in k.lower() for k in active_cooldowns):
+                    if not cooldowns_affect_family(active_cooldowns, "flash"):
                         all_summaries.append(summary)
                 else:
                     # 不筛选冷却状态

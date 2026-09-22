@@ -2,6 +2,7 @@ import pytest
 
 from src.converter.antigravity_fix import (
     _ensure_empty_tool_schema_for_claude,
+    _normalize_claude_text_parts,
     normalize_antigravity_request,
 )
 from src.utils import ANTIGRAVITY_USER_AGENT, normalize_antigravity_model_alias
@@ -58,7 +59,7 @@ async def test_normalize_antigravity_keeps_native_model_ids(model_id, stripped, 
 
 def test_antigravity_uses_version_gated_cli_fingerprint():
     assert ANTIGRAVITY_USER_AGENT == (
-        "antigravity/cli/1.1.12 "
+        "antigravity/cli/1.1.24 "
         "(aidev_client; os_type=windows; arch=amd64)"
     )
 
@@ -79,6 +80,70 @@ async def test_gemini_37_drops_trailing_model_turn(monkeypatch):
     result = await normalize_antigravity_request(
         {
             "model": "gemini-3.7-flash-medium",
+            "contents": [
+                {"role": "user", "parts": [{"text": "first question"}]},
+                {"role": "model", "parts": [{"text": "previous answer"}]},
+            ],
+            "generationConfig": {},
+        }
+    )
+
+    assert result["contents"] == [
+        {"role": "user", "parts": [{"text": "first question"}]}
+    ]
+
+
+
+def test_claude_nested_text_is_flattened_without_touching_other_parts():
+    contents = [
+        {
+            "role": "user",
+            "parts": [
+                {"text": {"text": "hello"}},
+                {"inlineData": {"mimeType": "image/png", "data": "abc"}},
+            ],
+        }
+    ]
+
+    assert _normalize_claude_text_parts(contents) == [
+        {
+            "role": "user",
+            "parts": [
+                {"text": "hello"},
+                {"inlineData": {"mimeType": "image/png", "data": "abc"}},
+            ],
+        }
+    ]
+
+
+def test_claude_empty_text_part_is_removed():
+    contents = [
+        {
+            "role": "user",
+            "parts": [{"text": {}}, {"text": "  "}, {"text": "valid"}],
+        }
+    ]
+
+    assert _normalize_claude_text_parts(contents) == [
+        {"role": "user", "parts": [{"text": "valid"}]}
+    ]
+
+
+def test_claude_text_list_is_flattened():
+    contents = [{"role": "user", "parts": [{"text": ["one", {"text": "two"}]}]}]
+
+    assert _normalize_claude_text_parts(contents) == [
+        {"role": "user", "parts": [{"text": "one two"}]}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gemini_38_drops_trailing_model_turn(monkeypatch):
+    monkeypatch.setenv("RETURN_THOUGHTS_TO_FRONTEND", "true")
+
+    result = await normalize_antigravity_request(
+        {
+            "model": "gemini-3.8-flash-medium",
             "contents": [
                 {"role": "user", "parts": [{"text": "first question"}]},
                 {"role": "model", "parts": [{"text": "previous answer"}]},

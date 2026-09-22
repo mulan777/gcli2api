@@ -60,7 +60,7 @@ function createCredsManager(type) {
         currentPreviewFilter: 'all',
         currentTierFilter: 'all',
         currentRemarkFilter: '__all__',
-        statsData: { total: 0, normal: 0, disabled: 0, permanent_disabled: 0 },
+        statsData: { total: 0, normal: 0, disabled: 0, permanent_disabled: 0, licensable: 0 },
 
         // API端点
         getEndpoint: (action) => {
@@ -72,6 +72,8 @@ function createCredsManager(type) {
                 batchRefreshCooldown: `./creds/batch-refresh-cooldown`,
                 download: `./creds/download`,
                 downloadAll: `./creds/download-all`,
+                downloadSelected: `./creds/download-selected`,
+                copyEmails: `./creds/copy-emails`,
                 detail: `./creds/detail`,
                 fetchEmail: `./creds/fetch-email`,
                 refreshAllEmails: `./creds/refresh-all-emails`,
@@ -125,6 +127,7 @@ function createCredsManager(type) {
                             filename: item.filename,
                             status: {
                                 disabled: item.disabled,
+                                licensable: item.licensable || false,
                                 permanent_disabled: item.permanent_disabled || false,
                                 error_codes: item.error_codes || [],
                                 last_success: item.last_success,
@@ -139,7 +142,8 @@ function createCredsManager(type) {
                             success_count: item.success_count || 0,
                             failure_count: item.failure_count || 0,
                             cycle_stats: item.cycle_stats || {},
-                            last_cycle_stats: item.last_cycle_stats || {}
+                            last_cycle_stats: item.last_cycle_stats || {},
+                            lifetime_stats: item.lifetime_stats || {}
                         };
                     });
 
@@ -158,7 +162,7 @@ function createCredsManager(type) {
 
                     let msg = `已加载 ${data.total} 个${type === 'antigravity' ? 'Antigravity' : ''}凭证文件`;
                     if (this.currentStatusFilter !== 'all') {
-                        msg += ` (筛选: ${this.currentStatusFilter === 'enabled' ? '仅启用' : (this.currentStatusFilter === 'permanent_disabled' ? '永久禁用' : '仅禁用')})`;
+                        msg += ` (筛选: ${this.currentStatusFilter === 'enabled' ? '仅启用' : (this.currentStatusFilter === 'permanent_disabled' ? '永久禁用' : (this.currentStatusFilter === 'licensable' ? '可授权' : '仅禁用'))})`;
                     }
                     showStatus(msg, 'success');
                 } else {
@@ -173,10 +177,12 @@ function createCredsManager(type) {
 
         // 计算统计数据（仅用于兼容旧版本后端）
         calculateStats() {
-            this.statsData = { total: this.totalCount, normal: 0, disabled: 0, permanent_disabled: 0 };
+            this.statsData = { total: this.totalCount, normal: 0, disabled: 0, permanent_disabled: 0, licensable: 0 };
             Object.values(this.data).forEach(credInfo => {
                 if (credInfo.status.permanent_disabled) {
                     this.statsData.permanent_disabled++;
+                } else if (credInfo.status.disabled && credInfo.status.licensable) {
+                    this.statsData.licensable++;
                 } else if (credInfo.status.disabled) {
                     this.statsData.disabled++;
                 } else {
@@ -192,6 +198,8 @@ function createCredsManager(type) {
             document.getElementById(this.getElementId('StatDisabled')).textContent = this.statsData.disabled;
             const permanentEl = document.getElementById(this.getElementId('StatPermanentDisabled'));
             if (permanentEl) permanentEl.textContent = this.statsData.permanent_disabled || 0;
+            const licensableEl = document.getElementById(this.getElementId('StatLicensable'));
+            if (licensableEl) licensableEl.textContent = this.statsData.licensable || 0;
         },
 
         // 渲染凭证列表
@@ -274,7 +282,7 @@ function createCredsManager(type) {
             const selectedCount = this.selectedFiles.size;
             document.getElementById(this.getElementId('SelectedCount')).textContent = `已选择 ${selectedCount} 项`;
 
-            const batchBtnNames = ['Enable', 'Disable', 'PermanentDisable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown'];
+            const batchBtnNames = ['Enable', 'Disable', 'PermanentDisable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown', 'DownloadSelected', 'CopyEmails'];
             if (this.type === 'antigravity') {
                 batchBtnNames.push('EnableCredit');
                 batchBtnNames.push('DisableCredit');
@@ -376,6 +384,107 @@ function createCredsManager(type) {
                 }
             } catch (error) {
                 showStatus(`批量操作网络错误: ${error.message}`, 'error');
+            }
+        },
+
+        // 批量下载选中的凭证（打包为 zip）
+        async batchDownloadSelected() {
+            const selectedFiles = Array.from(this.selectedFiles);
+
+            if (selectedFiles.length === 0) {
+                showStatus('请先选择要下载的文件', 'error');
+                return;
+            }
+
+            try {
+                showStatus(`正在打包 ${selectedFiles.length} 个选中凭证...`, 'info');
+
+                const response = await fetch(`${this.getEndpoint('downloadSelected')}?${this.getModeParam()}`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ action: 'download_selected', filenames: selectedFiles })
+                });
+
+                if (!response.ok) {
+                    let detail = '未知错误';
+                    try {
+                        const data = await response.json();
+                        detail = data.detail || data.error || detail;
+                    } catch (e) { }
+                    showStatus(`批量下载失败: ${detail}`, 'error');
+                    return;
+                }
+
+                const missingRaw = response.headers.get('X-Missing-Creds');
+                const missingEncoded = response.headers.get('X-Missing-Creds-Encoded');
+                const missing = missingRaw ? (missingEncoded === '1' ? decodeURIComponent(missingRaw) : missingRaw) : null;
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = this.type === 'antigravity' ? 'antigravity_credentials_selected.zip' : 'credentials_selected.zip';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                if (missing) {
+                    showStatus(`打包下载完成，但部分文件缺失：${missing}`, 'info');
+                } else {
+                    showStatus(`打包下载完成：${selectedFiles.length} 个文件`, 'success');
+                }
+            } catch (error) {
+                showStatus(`批量下载网络错误: ${error.message}`, 'error');
+            }
+        },
+
+        // 批量复制选中凭证的邮箱
+        async batchCopyEmails() {
+            const selectedFiles = Array.from(this.selectedFiles);
+
+            if (selectedFiles.length === 0) {
+                showStatus('请先选择要复制邮箱的文件', 'error');
+                return;
+            }
+
+            try {
+                showStatus(`正在获取 ${selectedFiles.length} 个选中凭证的邮箱...`, 'info');
+
+                const response = await fetch(`${this.getEndpoint('copyEmails')}?${this.getModeParam()}`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ action: 'copy_emails', filenames: selectedFiles })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    showStatus(`批量复制邮箱失败: ${data.detail || data.error || '未知错误'}`, 'error');
+                    return;
+                }
+
+                if (!data.emails || data.emails.length === 0) {
+                    const noEmail = (data.missing_detail && data.missing_detail.no_email) || [];
+                    showMessageModal('无邮箱可复制',
+                        `选中的 ${data.total_requested} 个凭证都没有邮箱${noEmail.length ? '，例如：\n' + noEmail.slice(0, 5).join('\n') : ''}\n\n可先点「刷新所有邮箱」补齐后再试。`, 'info');
+                    return;
+                }
+
+                const text = data.emails.join('\n');
+                const copied = await copyTextToClipboard(text);
+
+                const notes = [];
+                if (data.without_email > 0) notes.push(`${data.without_email} 个无邮箱`);
+                if (data.not_found > 0) notes.push(`${data.not_found} 个不存在`);
+                const dedupNote = data.emails.length < data.with_email ? `（去重前 ${data.with_email} 个）` : '';
+
+                if (copied) {
+                    showStatus(`已复制 ${data.emails.length} 个邮箱到剪贴板${dedupNote}${notes.length ? '；' + notes.join('、') : ''}`, 'success');
+                } else {
+                    showMessageModal('邮箱清单（剪贴板不可用，请手动复制）', text, 'info');
+                }
+            } catch (error) {
+                showStatus(`批量复制邮箱网络错误: ${error.message}`, 'error');
             }
         }
     };
@@ -540,6 +649,30 @@ function createUploadManager(type) {
 // =====================================================================
 // 工具函数
 // =====================================================================
+// 剪贴板复制（http 环境降级 execCommand）
+async function copyTextToClipboard(text) {
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch (e) { /* 降级 */ }
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch (e) {
+        return false;
+    }
+}
+
 function showStatus(message, type = 'info') {
     const statusSection = document.getElementById('statusSection');
     if (statusSection) {
@@ -659,13 +792,19 @@ function createCredCard(credInfo, manager) {
 
     // 卡片样式
     div.className = (status.disabled || status.permanent_disabled) ? 'cred-card disabled' : 'cred-card';
+    const isLicensable = !status.permanent_disabled && status.disabled && status.licensable;
 
     // 状态徽章
     let statusBadges = '';
+    if (isLicensable) {
+        statusBadges += '<span class="status-badge" style="background-color: #8e24aa; color: white;" title="license 未授权：不参与调用，批量启用后可恢复">可授权</span>';
+    }
     statusBadges += status.permanent_disabled
         ? '<span class="status-badge disabled">永久禁用</span>'
         : (status.disabled
-            ? '<span class="status-badge disabled">已禁用</span>'
+            ? (isLicensable
+                ? ''
+                : '<span class="status-badge disabled">已禁用</span>')
             : '<span class="status-badge enabled">已启用</span>');
 
     if (status.error_codes && status.error_codes.length > 0) {
@@ -788,10 +927,22 @@ function createCredCard(credInfo, manager) {
     const lastFlash = Number(lastCycle.flash || 0);
     const lastOther = Number(lastCycle.other || 0);
     const currentCycleLine = `<div class="cred-usage-stats" style="font-size: 12px; color: #555; margin-top: 2px;" title="当前循环调用统计：从上一轮冷却结算后开始，到下一次进入冷却前累计；Claude 仅统计模型名包含 claude 的请求">当前循环：Pro ${cyclePro} / Flash ${cycleFlash} / 其他 ${cycleOther} / Claude 成功 ${cycleClaudeSuccess} / 失败 ${cycleClaudeFailure} / 总计 ${cycleTotal}</div>`;
+    const lifetime = credInfo.lifetime_stats || {};
+    const lifeTotal = Number(lifetime.total || 0);
+    const lifePro = Number(lifetime.pro || 0);
+    const lifeFlash = Number(lifetime.flash || 0);
+    const lifeOther = Number(lifetime.other || 0);
+    const lifeCycles = Number(lifetime.cycles || 0);
+    const lifeClosedPro = Number(lifetime.closed_pro || 0);
+    const lifeClosedFlash = Number(lifetime.closed_flash || 0);
+    const lifeClosedTotal = Number(lifetime.closed_total || 0);
+    const lifetimeLine = lifeTotal > 0 || lifeCycles > 0
+        ? `<div class="cred-usage-stats" style="font-size: 12px; color: #333; margin-top: 2px; font-weight: 600;" title="终身累计：跨所有5小时轮次的总计，不受冷却结算与重新导入影响；cycles=进入冷却结算的轮次数，已完结=已结算轮次的合计">累计：Pro ${lifePro} / Flash ${lifeFlash} / 其他 ${lifeOther} / 总计 ${lifeTotal} · 共 ${lifeCycles} 轮（已完结 Pro ${lifeClosedPro} / Flash ${lifeClosedFlash} / 总 ${lifeClosedTotal}）</div>`
+        : '';
     const lastCycleLine = lastTotal > 0
         ? `<div class="cred-usage-stats" style="font-size: 12px; color: #777; margin-top: 2px;" title="上一轮循环统计：进入 ${lastCycle.cooldown_family || 'unknown'} 冷却前累计">上一轮：Pro ${lastPro} / Flash ${lastFlash} / 其他 ${lastOther} / 总计 ${lastTotal}</div>`
         : '';
-    const usageStatsInfo = currentCycleLine + lastCycleLine;
+    const usageStatsInfo = lifetimeLine + currentCycleLine + lastCycleLine;
 
     const checkboxClass = manager.getElementId('file-checkbox');
 
@@ -1585,6 +1736,14 @@ function toggleSelectAllAntigravity() {
     AppState.antigravityCreds.updateBatchControls();
 }
 function batchAntigravityAction(action) { AppState.antigravityCreds.batchAction(action); }
+
+// 批量下载选中凭证（打包 zip）
+async function batchDownloadSelected() { await AppState.creds.batchDownloadSelected(); }
+async function batchDownloadSelectedAntigravity() { await AppState.antigravityCreds.batchDownloadSelected(); }
+
+// 批量复制选中凭证的邮箱
+async function batchCopyEmails() { await AppState.creds.batchCopyEmails(); }
+async function batchCopyAntigravityEmails() { await AppState.antigravityCreds.batchCopyEmails(); }
 function downloadAntigravityCred(filename) {
     fetch(`./creds/download/${filename}?mode=antigravity`, { headers: getAuthHeaders() })
         .then(r => r.ok ? r.blob() : Promise.reject())

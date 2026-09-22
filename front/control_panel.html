@@ -1846,6 +1846,10 @@
                         <span class="stat-number" id="statPermanentDisabled">0</span>
                         <span class="stat-label">永久禁用</span>
                     </div>
+                    <div class="stat-item normal" style="border-top: 3px solid #8e24aa;">
+                        <span class="stat-number" id="statLicensable">0</span>
+                        <span class="stat-label" title="license 未授权凭证：禁用且不参与调用，批量启用后恢复">可授权</span>
+                    </div>
                 </div>
 
                 <div class="manage-actions">
@@ -1879,6 +1883,10 @@
                             disabled>批量额度检测/双向同步冷却</button>
                         <button class="batch-btn" id="batchPreviewBtn" onclick="batchConfigurePreview()"
                             disabled>批量设置预览</button>
+                        <button class="batch-btn" id="batchDownloadSelectedBtn" onclick="batchDownloadSelected()"
+                            disabled>批量下载选中</button>
+                        <button class="batch-btn batch-email" id="batchCopyEmailsBtn" onclick="batchCopyEmails()"
+                            disabled>批量复制邮箱</button>
                         <button class="batch-btn batch-email" onclick="refreshAllEmails()">刷新所有邮箱</button>
                         <button class="batch-btn" onclick="deduplicateByEmail()">凭证一键去重</button>
                     </div>
@@ -1892,6 +1900,7 @@
                         <option value="enabled">仅启用</option>
                         <option value="disabled">仅禁用</option>
                         <option value="permanent_disabled">永久禁用</option>
+                        <option value="licensable">可授权</option>
                     </select>
 
                     <label for="errorCodeFilter" style="margin-left: 20px;">错误码：</label>
@@ -2072,6 +2081,10 @@
                         <span class="stat-number" id="antigravityStatPermanentDisabled">0</span>
                         <span class="stat-label">永久禁用</span>
                     </div>
+                    <div class="stat-item normal" style="border-top: 3px solid #8e24aa;">
+                        <span class="stat-number" id="antigravityStatLicensable">0</span>
+                        <span class="stat-label" title="license 未授权凭证：禁用且不参与调用，批量启用后恢复">可授权</span>
+                    </div>
                 </div>
 
                 <div class="manage-actions">
@@ -2107,6 +2120,10 @@
                             onclick="batchTestSelectedAntigravityCredentials()" disabled>批量消息测试</button>
                         <button class="batch-btn" id="antigravityBatchRefreshCooldownBtn"
                             onclick="batchRefreshCooldownSelectedAntigravityCredentials()" disabled>批量额度检测/双向同步冷却</button>
+                        <button class="batch-btn" id="antigravityBatchDownloadSelectedBtn"
+                            onclick="batchDownloadSelectedAntigravity()" disabled>批量下载选中</button>
+                        <button class="batch-btn batch-email" id="antigravityBatchCopyEmailsBtn"
+                            onclick="batchCopyAntigravityEmails()" disabled>批量复制邮箱</button>
                         <button class="batch-btn batch-email" onclick="refreshAllAntigravityEmails()">刷新所有邮箱</button>
                         <button class="batch-btn" onclick="deduplicateAntigravityByEmail()">凭证一键去重</button>
                     </div>
@@ -2121,6 +2138,7 @@
                         <option value="enabled">仅启用</option>
                         <option value="disabled">仅禁用</option>
                         <option value="permanent_disabled">永久禁用</option>
+                        <option value="licensable">可授权</option>
                     </select>
 
                     <label for="antigravityErrorCodeFilter" style="margin-left: 20px;">错误码：</label>

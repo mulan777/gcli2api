@@ -379,6 +379,10 @@ class CredFileBatchActionRequest(BaseModel):
     filenames: List[str]  # 批量操作的文件名列表
 
 
+class CredFilenameListRequest(BaseModel):
+    filenames: List[str]  # 批量操作仅涉及文件名列表的请求体
+
+
 class CredFileBatchTestRequest(BaseModel):
     filenames: List[str]
 

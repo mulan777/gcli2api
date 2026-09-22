@@ -1485,6 +1485,10 @@
                         <span class="stat-number" id="statDisabled">0</span>
                         <span class="stat-label">禁用</span>
                     </div>
+                    <div class="stat-item" style="border-left: 4px solid #8e24aa;">
+                        <span class="stat-number" id="statLicensable">0</span>
+                        <span class="stat-label">可授权</span>
+                    </div>
                 </div>
 
                 <div style="display: flex; gap: 8px; margin: 15px 0; flex-wrap: wrap;">
@@ -1521,6 +1525,10 @@
                             disabled>额度检测/双向同步</button>
                         <button class="btn btn-small" id="batchPreviewBtn" onclick="batchConfigurePreview()"
                             disabled>批量设置预览</button>
+                        <button class="btn btn-small" id="batchDownloadSelectedBtn" onclick="batchDownloadSelected()"
+                            disabled>批量下载选中</button>
+                        <button class="btn btn-small" id="batchCopyEmailsBtn" onclick="batchCopyEmails()"
+                            disabled>批量复制邮箱</button>
                         <button class="btn btn-small" onclick="refreshAllEmails()">刷新所有邮箱</button>
                         <button class="btn btn-small" onclick="deduplicateByEmail()">凭证一键去重</button>
                     </div>
@@ -1535,7 +1543,8 @@
                             <option value="all">全部凭证</option>
                             <option value="enabled">仅启用</option>
                             <option value="disabled">仅禁用</option>
-                        <option value="permanent_disabled">永久禁用</option>
+                            <option value="permanent_disabled">永久禁用</option>
+                            <option value="licensable">可授权</option>
                         </select>
                     </div>
 
@@ -1735,6 +1744,10 @@
                         <span class="stat-number" id="antigravityStatDisabled">0</span>
                         <span class="stat-label">禁用</span>
                     </div>
+                    <div class="stat-item" style="border-left: 4px solid #8e24aa;">
+                        <span class="stat-number" id="antigravityStatLicensable">0</span>
+                        <span class="stat-label">可授权</span>
+                    </div>
                 </div>
 
                 <div style="display: flex; gap: 8px; margin: 15px 0; flex-wrap: wrap;">
@@ -1777,6 +1790,10 @@
                             onclick="batchTestSelectedAntigravityCredentials()" disabled>批量消息测试</button>
                         <button class="btn btn-small" id="antigravityBatchRefreshCooldownBtn"
                             onclick="batchRefreshCooldownSelectedAntigravityCredentials()" disabled>额度检测/双向同步</button>
+                        <button class="btn btn-small" id="antigravityBatchDownloadSelectedBtn"
+                            onclick="batchDownloadSelectedAntigravity()" disabled>批量下载选中</button>
+                        <button class="btn btn-small" id="antigravityBatchCopyEmailsBtn"
+                            onclick="batchCopyAntigravityEmails()" disabled>批量复制邮箱</button>
                         <button class="btn btn-small" onclick="refreshAllAntigravityEmails()">刷新所有邮箱</button>
                         <button class="btn btn-small" onclick="deduplicateAntigravityByEmail()">凭证一键去重</button>
                     </div>
@@ -1791,7 +1808,8 @@
                             <option value="all">全部凭证</option>
                             <option value="enabled">仅启用</option>
                             <option value="disabled">仅禁用</option>
-                        <option value="permanent_disabled">永久禁用</option>
+                            <option value="permanent_disabled">永久禁用</option>
+                            <option value="licensable">可授权</option>
                         </select>
                     </div>
 

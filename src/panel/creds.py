@@ -10,6 +10,7 @@ import os
 import time
 import zipfile
 from typing import Any, List, Optional, Tuple
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Response, Body
 from fastapi.responses import JSONResponse
@@ -19,6 +20,7 @@ from src.credential_manager import credential_manager
 from src.models import (
     CredFileActionRequest,
     CredFileBatchActionRequest,
+    CredFilenameListRequest,
     CredFileBatchTestRequest,
     RefreshTokenAddRequest,
     RefreshTokenBatchAddRequest,
@@ -34,6 +36,7 @@ from src.utils import (
     CLIENT_SECRET as UTILS_GEMINI_CLIENT_SECRET,
 )
 from src.api.antigravity import fetch_quota_info
+from src.api.utils import is_license_error, apply_probe_error_classification
 from src.api.utils import check_should_auto_ban
 from src.google_oauth_api import Credentials, fetch_project_id_and_tier, get_user_projects, select_default_project, enable_required_apis, ensure_geminicli_project, validate_geminicli_project
 from src.httpx_client import post_async
@@ -257,8 +260,8 @@ async def get_creds_status_common(
         raise HTTPException(status_code=400, detail="offset 必须大于等于 0")
     if limit not in [20, 50, 100, 200, 500, 1000]:
         raise HTTPException(status_code=400, detail="limit 只能是 20、50、100、200、500 或 1000")
-    if status_filter not in ["all", "enabled", "disabled", "permanent_disabled"]:
-        raise HTTPException(status_code=400, detail="status_filter 只能是 all、enabled、disabled 或 permanent_disabled")
+    if status_filter not in ["all", "enabled", "disabled", "permanent_disabled", "licensable"]:
+        raise HTTPException(status_code=400, detail="status_filter 只能是 all、enabled、disabled、permanent_disabled 或 licensable")
     if cooldown_filter and cooldown_filter not in ["all", "in_cooldown", "no_cooldown", "pro_no_cooldown", "flash_no_cooldown", "claude_no_cooldown"]:
         raise HTTPException(status_code=400, detail="cooldown_filter 只能是 all、in_cooldown、no_cooldown、pro_no_cooldown、flash_no_cooldown 或 claude_no_cooldown")
     if preview_filter and preview_filter not in ["all", "preview", "no_preview"]:
@@ -291,6 +294,7 @@ async def get_creds_status_common(
             "filename": os.path.basename(summary["filename"]),
             "user_email": summary["user_email"],
             "disabled": summary["disabled"],
+            "licensable": summary.get("licensable", False),
             "error_codes": summary["error_codes"],
             "last_success": summary["last_success"],
             "backend_type": backend_type,
@@ -301,6 +305,7 @@ async def get_creds_status_common(
             "failure_count": summary.get("failure_count", 0),
             "cycle_stats": summary.get("cycle_stats", {}),
             "last_cycle_stats": summary.get("last_cycle_stats", {}),
+            "lifetime_stats": summary.get("lifetime_stats", {}),
             "remark": summary.get("remark", ""),
         }
 
@@ -317,7 +322,7 @@ async def get_creds_status_common(
         "offset": offset,
         "limit": limit,
         "has_more": (offset + limit) < result["total"],
-        "stats": result.get("stats", {"total": 0, "normal": 0, "disabled": 0}),
+        "stats": result.get("stats", {"total": 0, "normal": 0, "disabled": 0, "licensable": 0}),
     })
 
 
@@ -1190,6 +1195,134 @@ async def download_all_creds(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/download-selected")
+async def download_selected_creds(
+    request: CredFilenameListRequest,
+    token: str = Depends(verify_panel_token),
+    mode: str = "geminicli"
+):
+    """
+    打包下载选中的凭证文件（复用全量打包逻辑，仅限请求的文件名列表）
+    """
+    try:
+        mode = validate_mode(mode)
+        filenames = [f for f in (request.filenames or []) if f]
+        if not filenames:
+            raise HTTPException(status_code=400, detail="文件名列表不能为空")
+
+        zip_filename = "antigravity_credentials_selected.zip" if mode == "antigravity" else "credentials_selected.zip"
+
+        storage_adapter = await get_storage_adapter()
+
+        log.info(f"开始打包选中的 {len(filenames)} 个 {mode} 凭证文件...")
+
+        zip_buffer = io.BytesIO()
+        success_count = 0
+        missing = []
+
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for filename in filenames:
+                if not filename.endswith(".json"):
+                    missing.append(f"{filename}: 无效的文件类型")
+                    continue
+                try:
+                    credential_data = await storage_adapter.get_credential(os.path.basename(filename), mode=mode)
+                    if not credential_data:
+                        missing.append(f"{filename}: 凭证不存在")
+                        continue
+                    content = json.dumps(credential_data, ensure_ascii=False, indent=2)
+                    zip_file.writestr(os.path.basename(filename), content)
+                    success_count += 1
+                except Exception as e:
+                    log.warning(f"处理选中的 {mode} 凭证文件 {filename} 时出错: {e}")
+                    missing.append(f"{filename}: {str(e)}")
+                    continue
+
+        if success_count == 0:
+            detail = "没有可下载的选中凭证文件"
+            if missing:
+                detail += "：" + "；".join(missing[:10])
+            raise HTTPException(status_code=404, detail=detail)
+
+        log.info(f"选中打包完成: 成功 {success_count}/{len(filenames)} 个文件")
+
+        headers = {"Content-Disposition": f"attachment; filename={zip_filename}"}
+        if missing:
+            # 部分失败时附带缺失清单（自定义头；中文需 URL 编码否则 latin-1 报错）
+            headers["X-Missing-Creds-Encoded"] = "1"
+            headers["X-Missing-Creds"] = quote(" ; ".join(missing))[:2000]
+
+        zip_buffer.seek(0)
+        return Response(
+            content=zip_buffer.getvalue(),
+            media_type="application/zip",
+            headers=headers,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"选中打包下载失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/copy-emails")
+async def copy_selected_emails(
+    request: CredFilenameListRequest,
+    token: str = Depends(verify_panel_token),
+    mode: str = "geminicli"
+):
+    """
+    批量获取选中凭证的邮箱（只读 user_email 字段，不做任何网络请求）
+    返回 filename→email 映射与邮箱清单
+    """
+    try:
+        mode = validate_mode(mode)
+        filenames = [f for f in (request.filenames or []) if f]
+        if not filenames:
+            raise HTTPException(status_code=400, detail="文件名列表不能为空")
+
+        storage_adapter = await get_storage_adapter()
+        all_states = await storage_adapter.get_all_credential_states(mode=mode)
+
+        email_map = {}
+        no_email = []
+        not_found = []
+        for filename in filenames:
+            base = os.path.basename(filename)
+            state = all_states.get(base)
+            if state is None:
+                not_found.append(base)
+                continue
+            email = (state or {}).get("user_email")
+            if email:
+                email_map[base] = email
+            else:
+                no_email.append(base)
+
+        emails = list(dict.fromkeys(email_map.values()))
+        log.info(f"批量复制邮箱: 命中 {len(email_map)}/{len(filenames)}，去重后 {len(emails)} 个邮箱")
+
+        return JSONResponse(content={
+            "total_requested": len(filenames),
+            "with_email": len(email_map),
+            "without_email": len(no_email),
+            "not_found": len(not_found),
+            "email_map": email_map,
+            "emails": emails,
+            "missing_detail": {
+                "no_email": no_email[:50],
+                "not_found": not_found[:50],
+            },
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"批量复制邮箱失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/verify-project/{filename}")
 async def verify_credential_project(
     filename: str,
@@ -1467,10 +1600,16 @@ async def batch_refresh_cooldown(
                 try:
                     quota = await _fetch_quota_for_credential(filename, mode=mode)
                     if not quota.get("success"):
+                        q_err = quota.get("error", "获取额度失败")
+                        try:
+                            await apply_probe_error_classification(filename, q_err, mode=mode)
+                        except Exception as cls_err:
+                            log.error(f"批量查额度错误分类失败 {filename}: {cls_err}")
                         return {
                             "filename": filename,
                             "success": False,
-                            "error": quota.get("error", "获取额度失败"),
+                            "error": q_err,
+                            "licensable": is_license_error(q_err),
                         }
                     models = quota.get("models", {}) or {}
 
@@ -2030,20 +2169,26 @@ async def test_credential_common(filename: str, mode: str = "geminicli") -> JSON
 
                 log.info(f"已保存测试错误信息: {filename} - 错误码 {status_code}")
 
-                # 测试失败也触发自动封禁（与真实业务调用对齐）：
-                # auto_ban_enabled=True 且 status_code 在 auto_ban_error_codes 列表内时
-                # 直接禁用该凭证，避免轮询命中已知会失败的凭证
+                # 测试失败分流：license 报错 → 「可授权」（禁用不参与调用，可批量启用恢复）；
+                # 其他错误（含 429 quota exhausted）只打错误码；auto_ban 名单内的再走自动封禁
                 try:
-                    if await check_should_auto_ban(status_code):
+                    if is_license_error(error_text):
                         log.warning(
-                            f"[BATCH-TEST AUTO_BAN] Status {status_code} triggers auto-ban "
-                            f"for credential: {filename} (mode={mode})"
+                            f"[BATCH-TEST LICENSABLE] license error on {filename} "
+                            f"(mode={mode}, status={status_code}) -> 可授权"
                         )
-                        await credential_manager.set_cred_disabled(
-                            filename, True, mode=mode
-                        )
+                        await credential_manager.set_cred_licensable(filename, True, mode=mode)
+                    else:
+                        if await check_should_auto_ban(status_code):
+                            log.warning(
+                                f"[BATCH-TEST AUTO_BAN] Status {status_code} triggers auto-ban "
+                                f"for credential: {filename} (mode={mode})"
+                            )
+                            await credential_manager.set_cred_disabled(
+                                filename, True, mode=mode
+                            )
                 except Exception as ban_err:
-                    log.error(f"测试失败自动封禁触发异常 {filename}: {ban_err}")
+                    log.error(f"测试失败分类/封禁处理异常 {filename}: {ban_err}")
             except Exception as e:
                 log.error(f"保存测试错误信息失败: {e}")
 
@@ -2227,12 +2372,14 @@ async def batch_test_credentials(
                     response = await test_credential_common(filename, mode=mode)
                     body = json.loads(response.body.decode("utf-8"))
                     ok = response.status_code == 200 and body.get("success", False)
+                    err = body.get("error")
                     return {
                         "filename": filename,
                         "success": ok,
                         "status_code": body.get("status_code", response.status_code),
                         "message": body.get("message") or ("测试成功" if ok else "测试失败"),
-                        "error": body.get("error"),
+                        "error": err,
+                        "licensable": bool(not ok and is_license_error(err)),
                     }
                 except HTTPException as e:
                     return {
@@ -2516,6 +2663,12 @@ async def _add_credential_by_refresh_token(
     # 4. 入库
     if mode == "antigravity":
         await credential_manager.add_antigravity_credential(filename, credential_data)
+        # 导入时检测到的订阅等级直接落库（与 verify 路径对齐），
+        # 否则表列默认值 'pro' 会掩盖 free 卡，面板显示全部 pro。
+        if subscription_tier:
+            await credential_manager.update_credential_state(
+                filename, {"tier": subscription_tier}, mode="antigravity"
+            )
     else:
         await credential_manager.add_credential(filename, credential_data)
 
@@ -2604,7 +2757,7 @@ async def _retry_project_id_in_background(filename: str, mode: str, max_attempts
                 log.info(f"后台补探测跳过：{filename} 已有 project_id")
                 return
 
-            pid, _tier = await _detect_project_id_once(current, mode)
+            pid, backfill_tier = await _detect_project_id_once(current, mode)
             if not pid:
                 log.info(f"后台补探测 project_id 第 {attempt}/{max_attempts} 次未成功: {filename}")
                 continue
@@ -2615,8 +2768,12 @@ async def _retry_project_id_in_background(filename: str, mode: str, max_attempts
                 return
             latest["project_id"] = pid
             await storage.store_credential(filename, latest, mode=mode)
+            state_updates: Dict[str, Any] = {"disabled": False}
+            # 与主导入路径对齐：anti 模式下补探测到的订阅等级一并落库
+            if mode == "antigravity" and backfill_tier:
+                state_updates["tier"] = backfill_tier
             await storage.update_credential_state(
-                filename, {"disabled": False}, mode=mode
+                filename, state_updates, mode=mode
             )
             log.info(f"后台补探测 project_id 成功: {filename} -> {pid} (第 {attempt}/{max_attempts} 次)")
             return
