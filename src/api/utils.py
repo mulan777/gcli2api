@@ -685,16 +685,14 @@ def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
                 if cooldown_seconds > 0:
                     return time.time() + cooldown_seconds
 
-        # 优先级 3: 仅当确认是"用户每日额度耗尽"才兜底 4h。
+        # 优先级 3: 官方口径——message 完全匹配裸 quota 文案才兜底 4h；
         # 容量挤爆类 reason（MODEL_CAPACITY_EXHAUSTED 等）不锁冷却。
         if error_obj.get("status") == "RESOURCE_EXHAUSTED":
             if reasons & CAPACITY_EXHAUSTED_REASONS and "QUOTA_EXHAUSTED" not in reasons:
                 # 服务端容量问题：让调度器自然重试，不写入冷却
                 return None
-            if mode.lower() == "antigravity" and not reasons:
-                # 裸 Antigravity 429 没有原因或重置点时，不误锁整个额度族。
-                return None
-            return time.time() + RESOURCE_EXHAUSTED_COOLDOWN_HOURS * 3600
+            if error_obj.get("message") == "Resource has been exhausted (e.g. check quota).":
+                return time.time() + RESOURCE_EXHAUSTED_COOLDOWN_HOURS * 3600
 
         return None
 

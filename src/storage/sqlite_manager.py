@@ -577,7 +577,7 @@ class SQLiteManager:
                                 return filename, credential_data
                             return None
 
-                        for filename, credential_json, model_cooldowns_json, enable_credit in rows:
+                        for filename, credential_json, model_cooldowns_json, _model_disabled, enable_credit in rows:
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
                             model_cooldown = model_cooldowns.get(model_name)
                             if model_cooldown is None or current_time >= model_cooldown:
