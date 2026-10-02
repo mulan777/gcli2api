@@ -1,4 +1,4 @@
-full_hash=f0fd1eb8b89a610e7273bfbd04c577cc1efdd8b3
-short_hash=f0fd1eb
-message=fix(stats): 冷却轮次结算改为同族判定——gemini 全系共享一轮、claude/gpt-oss 一轮
-date=2026-09-22 05:02:58 +0000
+full_hash=2635f6420c4eec3a395a383ec58920a2464f3150
+short_hash=2635f642
+message=merge upstream 2026-09-27: anti-truncation fixes + antigravity 1.2.12
+date=2026-10-02 08:27:25 +0000
