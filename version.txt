@@ -1,4 +1,4 @@
-full_hash=2635f6420c4eec3a395a383ec58920a2464f3150
-short_hash=2635f642
-message=merge upstream 2026-09-27: anti-truncation fixes + antigravity 1.2.12
-date=2026-10-02 08:27:25 +0000
+full_hash=e8963a5b6a58235ed278642ba1f712116bbdb928
+short_hash=e8963a5
+message=fix(storage): sqlite冷却查询解包补 model_disabled 列(5列SELECT 4变量解包bug)
+date=2026-10-02 10:33:49 +0200
