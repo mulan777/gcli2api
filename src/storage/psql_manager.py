@@ -29,6 +29,10 @@ def _today_beijing_str() -> str:
 # 模型家族归一化：各种变种（-search / -thinking / -lite / preview / pro / flash 等）
 # 会被映射到其基础系列。按“更特殊在前”的顺序匹配。
 MODEL_FAMILY_RULES = [
+    # 3.8 系（Antigravity low / medium / high / tiered / maxthinking 共用同一统计家族）
+    ("gemini-3.8-flash",              ("3.8-flash",      "3.8-flash")),
+    # 3.6 系（tiered 等后缀同桶）
+    ("gemini-3.6-flash",              ("3.6-flash",      "3.6-flash")),
     # 3.7 系（Antigravity low / medium / high / tiered 共用同一统计家族）
     ("gemini-3.7-flash",              ("3.7-flash",      "3.7-flash")),
     # 3.5 系（Antigravity 后端别名：低/中/高 thinking budget 的 Gemini 3.5 Flash）
