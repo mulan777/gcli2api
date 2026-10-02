@@ -1,4 +1,4 @@
-full_hash=e8963a5b6a58235ed278642ba1f712116bbdb928
-short_hash=e8963a5
-message=fix(storage): sqlite冷却查询解包补 model_disabled 列(5列SELECT 4变量解包bug)
-date=2026-10-02 10:33:49 +0200
+full_hash=6c82d026f875298697ed674305e668c2e06cb115
+short_hash=6c82d02
+message=feat(stats): 模型家族规则补 3.8/3.6 系——tiered/high/medium/low/maxthinking 全后缀同桶
+date=2026-10-02 10:42:31 +0200
